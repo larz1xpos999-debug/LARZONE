@@ -1,541 +1,270 @@
 #requires -version 5.1
-<#
- LARZONE TUNE — Complete Edition
- Windows / FiveM / Network / Mouse / CPU-RAM
- - 4 Performance profiles
- - 5-9 category menus, no duplicated tuning ownership
- - Live "APPLIED / DIFFERENT / NOT RUN BY LARZONE" status
- - Persistent Larzone state
- - Timestamped registry backup + restore
- - Safe-by-default changes
+<#!
+LARZONE DEBLOAT - FiveM / Gaming focused
+Safe-first Windows debloat utility with a dark GUI.
+
+Features:
+- One-click Debloat (only selected, reversible items)
+- Disable optional telemetry/consumer features
+- Remove common built-in consumer apps for current user
+- Stop/disable selected non-essential services only when found
+- Restore defaults from a backup snapshot
+- Check Status: shows what this tool has already changed
+- Does NOT touch Windows boot processor count, maximum memory, BCD,
+  Win32PrioritySeparation, NetworkThrottlingIndex, keyboard/mouse queue sizes,
+  or other gaming Registry tweaks.
+
+Run as Administrator.
 #>
 
-$ErrorActionPreference = "SilentlyContinue"
-$AppName = "Larzone"
-$DataDir = Join-Path $env:ProgramData $AppName
-$BackupDir = Join-Path $DataDir "Backups"
-$StateFile = Join-Path $DataDir "state.json"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
-New-Item -ItemType Directory -Path $DataDir,$BackupDir -Force | Out-Null
-
-function IsAdmin {
-    $p = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+# -------------------- Admin --------------------
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+$p = New-Object Security.Principal.WindowsPrincipal($id)
+if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
 }
-function NeedAdmin {
-    if (!(IsAdmin)) {
-        Write-Host "`n[!] เปิด PowerShell แบบ Run as administrator ก่อน" -ForegroundColor Yellow
-        Read-Host "กด Enter เพื่อออก" | Out-Null
-        exit
+
+# -------------------- Paths --------------------
+$Root = Join-Path $env:ProgramData 'LarzoneDebloat'
+$Backup = Join-Path $Root 'Backup'
+$StateFile = Join-Path $Root 'state.json'
+New-Item -ItemType Directory -Force -Path $Root,$Backup | Out-Null
+
+function Load-State {
+    if (Test-Path $StateFile) {
+        try { return Get-Content $StateFile -Raw | ConvertFrom-Json } catch {}
+    }
+    return [pscustomobject]@{
+        DebloatRun=$false
+        AppCleanup=$false
+        Privacy=$false
+        Services=$false
+        LastAction='ยังไม่เคยรัน'
+        LastRun=''
+        BackupPath=''
     }
 }
-function Header([string]$title) {
-    Clear-Host
-    Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor DarkCyan
-    Write-Host ("║  ⚡ LARZONE TUNE  |  {0}" -f $title).PadRight(61) + "║" -ForegroundColor Cyan
-    Write-Host "╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
-}
-function Footer {
-    Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor DarkCyan
-}
-function PauseMenu { Read-Host "`nกด Enter เพื่อกลับ" | Out-Null }
-function ExitIfZero($x) { if($x -eq "0"){ exit } }
+$script:State = Load-State
 
-function LoadState {
-    $script:State = @{}
-    if(Test-Path $StateFile) {
-        try {
-            $o = Get-Content $StateFile -Raw | ConvertFrom-Json
-            foreach($p in $o.PSObject.Properties){ $script:State[$p.Name] = $p.Value }
-        } catch {}
-    }
-}
-function SaveState([string[]]$keys) {
-    LoadState
-    foreach($k in $keys){ $script:State[$k] = $true }
-    try {
-        ($script:State | ConvertTo-Json) | Set-Content $StateFile -Encoding UTF8
-    } catch {}
-}
-function WasRun([string]$key) {
-    LoadState
-    return [bool]($script:State[$key])
-}
-function StatusLine([string]$n,[string]$name,[bool]$match,[string]$key) {
-    if(WasRun $key) {
-        Write-Host ("[{0}] ● LARZONE APPLIED   {1}" -f $n,$name) -ForegroundColor Green
-    } elseif($match) {
-        Write-Host ("[{0}] ● MATCHED           {1}" -f $n,$name) -ForegroundColor Cyan
-    } else {
-        Write-Host ("[{0}] ○ NOT SET           {1}" -f $n,$name) -ForegroundColor Yellow
+function Save-State { $script:State | ConvertTo-Json -Depth 5 | Set-Content $StateFile -Encoding UTF8 }
+
+function Log($Text) {
+    if ($script:LogBox) {
+        $script:LogBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')] $Text`r`n")
+        $script:LogBox.SelectionStart=$script:LogBox.TextLength
+        $script:LogBox.ScrollToCaret()
     }
 }
 
-function Backup {
-    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $dir = Join-Path $BackupDir $stamp
-    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+# -------------------- Backup --------------------
+function Backup-RegistryKey($NativePath,$FileName) {
+    $out = Join-Path $Backup $FileName
+    reg.exe export $NativePath $out /y 2>$null | Out-Null
+}
 
-    $regs = @{
-        GameDVR = "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR"
-        GameConfigStore = "HKCU\System\GameConfigStore"
-        Mouse = "HKCU\Control Panel\Mouse"
-        Multimedia = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+function New-Backup {
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $dir = Join-Path $Backup $stamp
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $keys = @(
+        @('HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager','ContentDeliveryManager.reg'),
+        @('HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced','ExplorerAdvanced.reg'),
+        @('HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent','CloudContent.reg'),
+        @('HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection','DataCollection.reg'),
+        @('HKLM\SOFTWARE\Policies\Microsoft\Windows\OneDrive','OneDrive.reg')
+    )
+    foreach($k in $keys){
+        reg.exe export $k[0] (Join-Path $dir $k[1]) /y 2>$null | Out-Null
     }
-    foreach($n in $regs.Keys) {
-        reg.exe export $regs[$n] (Join-Path $dir "$n.reg") /y *> $null
-    }
-    powercfg /getactivescheme | Set-Content (Join-Path $dir "PowerPlan.txt")
-    netsh int tcp show global | Set-Content (Join-Path $dir "TCP_Global.txt")
-    Write-Host "✓ Backup: $dir" -ForegroundColor DarkGray
+    $script:State.BackupPath=$dir
+    Save-State
     return $dir
 }
-function RestoreLatest {
-    Header "♻ RESTORE"
-    $latest = Get-ChildItem $BackupDir -Directory | Sort-Object Name -Descending | Select-Object -First 1
-    if(!$latest) {
-        Write-Host "`nยังไม่มี Backup" -ForegroundColor Yellow
-        PauseMenu; return
+
+function Restore-Backup {
+    if (-not $script:State.BackupPath -or -not (Test-Path $script:State.BackupPath)) {
+        [System.Windows.Forms.MessageBox]::Show('ยังไม่มี Backup ที่สร้างโดยโปรแกรมนี้','RESTORE',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
     }
-    foreach($n in @("GameDVR","GameConfigStore","Mouse","Multimedia")) {
-        $f = Join-Path $latest.FullName "$n.reg"
-        if(Test-Path $f){ reg.exe import $f *> $null }
-    }
-    Write-Host "`n✓ คืนค่า Registry จาก Backup ล่าสุดแล้ว" -ForegroundColor Green
-    Write-Host "Backup: $($latest.Name)" -ForegroundColor DarkGray
-    PauseMenu
+    $yes=[System.Windows.Forms.MessageBox]::Show("Restore จาก:`n$($script:State.BackupPath)`n`nดำเนินการต่อหรือไม่?",'RESTORE',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning)
+    if($yes -ne [System.Windows.Forms.DialogResult]::Yes){return}
+    Get-ChildItem $script:State.BackupPath -Filter *.reg -File -ErrorAction SilentlyContinue | ForEach-Object { reg.exe import $_.FullName 2>$null | Out-Null }
+    Log 'Restore Registry เสร็จแล้ว'
+    [System.Windows.Forms.MessageBox]::Show('Restore เสร็จแล้ว แนะนำให้ Restart Windows','RESTORE',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 }
 
-# ----- Registry helpers -----
-$MM = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
-$Games = "$MM\Tasks\Games"
-$GameDVR = "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR"
-$GameConfig = "HKCU:\System\GameConfigStore"
-$Mouse = "HKCU:\Control Panel\Mouse"
-
-function GetReg($path,$name) {
-    try { return (Get-ItemProperty -Path $path -Name $name -ErrorAction Stop).$name } catch { return $null }
-}
-function RegMatch($path,$name,$wanted) {
-    $v = GetReg $path $name
-    return ([string]$v -eq [string]$wanted)
-}
-function SetDword($path,$name,$value) {
-    New-Item -Path $path -Force | Out-Null
-    New-ItemProperty -Path $path -Name $name -Value $value -PropertyType DWord -Force | Out-Null
-}
-function SetString($path,$name,$value) {
-    New-Item -Path $path -Force | Out-Null
-    New-ItemProperty -Path $path -Name $name -Value $value -PropertyType String -Force | Out-Null
+# -------------------- Safe debloat actions --------------------
+function Set-Dword($Path,$Name,[uint32]$Value){
+    if(-not(Test-Path $Path)){New-Item -Path $Path -Force | Out-Null}
+    New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
 }
 
-function ApplyFiveMCore {
-    Backup | Out-Null
-    SetDword $Games "GPU Priority" 8
-    SetDword $Games "Priority" 6
-    SetString $Games "Scheduling Category" "High"
-    SetDword $MM "NetworkThrottlingIndex" 0xffffffff
-    SetDword $MM "SystemResponsiveness" 0
-    SaveState @("FiveM_GPU","FiveM_GamePriority","FiveM_Scheduling","FiveM_NetworkThrottle","FiveM_SystemResponse")
-    Write-Host "✓ FiveM core applied" -ForegroundColor Green
-}
-function ApplyPowerHigh {
-    Backup | Out-Null
-    powercfg /setactive SCHEME_MIN | Out-Null
-    SaveState @("Power_High")
-    Write-Host "✓ High Performance power plan applied" -ForegroundColor Green
-}
-function ApplyPowerBalanced {
-    Backup | Out-Null
-    powercfg /setactive SCHEME_BALANCED | Out-Null
-    SaveState @("Power_Balanced")
-    Write-Host "✓ Balanced power plan applied" -ForegroundColor Green
-}
-function ApplyMouse {
-    Backup | Out-Null
-    SetDword $Mouse "MouseSpeed" 0
-    SetDword $Mouse "MouseThreshold1" 0
-    SetDword $Mouse "MouseThreshold2" 0
-    SaveState @("Mouse_Input")
-    Write-Host "✓ Mouse acceleration settings applied" -ForegroundColor Green
-}
-function ApplyWindowsSafe {
-    Backup | Out-Null
-    SetDword $GameDVR "AppCaptureEnabled" 0
-    SetDword $GameConfig "GameDVR_Enabled" 0
-    SaveState @("Windows_GameDVR","Windows_GameConfig")
-    Write-Host "✓ GameDVR / GameConfigStore disabled" -ForegroundColor Green
-}
-function ApplyNetworkSafe {
-    Backup | Out-Null
-    netsh int tcp set global autotuninglevel=normal | Out-Null
-    SaveState @("Network_AutoTuning")
-    Write-Host "✓ TCP Auto-Tuning = Normal" -ForegroundColor Green
-}
-function CleanFiveMCache {
-    Backup | Out-Null
-    $paths = @(
-        "$env:LOCALAPPDATA\FiveM\FiveM.app\data\cache",
-        "$env:LOCALAPPDATA\FiveM\FiveM.app\data\server-cache",
-        "$env:LOCALAPPDATA\FiveM\FiveM.app\data\server-cache-priv"
+function Apply-Privacy {
+    # Consumer content / suggestions
+    $cc='HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+    $names=@(
+        'ContentDeliveryAllowed','FeatureManagementEnabled','OemPreInstalledAppsEnabled',
+        'PreInstalledAppsEnabled','PreInstalledAppsEverEnabled','SilentInstalledAppsEnabled',
+        'SystemPaneSuggestionsEnabled','SubscribedContent-338387Enabled','SubscribedContent-338388Enabled',
+        'SubscribedContent-353698Enabled','RotatingLockScreenEnabled','RotatingLockScreenOverlayEnabled'
     )
-    foreach($d in $paths) {
-        if(Test-Path $d) {
-            Get-ChildItem $d -Force -ErrorAction SilentlyContinue |
-                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-    SaveState @("FiveM_Cache")
-    Write-Host "✓ FiveM cache cleaned" -ForegroundColor Green
+    foreach($n in $names){ Set-Dword $cc $n 0 }
+
+    # Telemetry policy: security/basic level. Does not disable Windows Update.
+    Set-Dword 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection' 'AllowTelemetry' 1
+
+    $script:State.Privacy=$true
+    Log 'Privacy / consumer suggestions applied'
 }
 
-# ----- Profiles: each level is cumulative; MAX is the full safe set -----
-function ApplyProfile([int]$level) {
-    Backup | Out-Null
-    switch($level) {
-        1 {
-            ApplyPowerBalanced
-        }
-        2 {
-            SetDword $MM "NetworkThrottlingIndex" 0xffffffff
-            SetDword $MM "SystemResponsiveness" 10
-            SetDword $Games "GPU Priority" 6
-            SetDword $Games "Priority" 4
-            SetString $Games "Scheduling Category" "High"
-            SetDword $GameDVR "AppCaptureEnabled" 0
-            SetDword $GameConfig "GameDVR_Enabled" 0
-            ApplyPowerBalanced
-            SaveState @("Profile_2","FiveM_NetworkThrottle","FiveM_SystemResponse","FiveM_GPU","FiveM_GamePriority","FiveM_Scheduling","Windows_GameDVR","Windows_GameConfig","Power_Balanced")
-        }
-        3 {
-            SetDword $MM "NetworkThrottlingIndex" 0xffffffff
-            SetDword $MM "SystemResponsiveness" 0
-            SetDword $Games "GPU Priority" 8
-            SetDword $Games "Priority" 6
-            SetString $Games "Scheduling Category" "High"
-            SetDword $GameDVR "AppCaptureEnabled" 0
-            SetDword $GameConfig "GameDVR_Enabled" 0
-            ApplyPowerHigh
-            SaveState @("Profile_3","FiveM_NetworkThrottle","FiveM_SystemResponse","FiveM_GPU","FiveM_GamePriority","FiveM_Scheduling","Windows_GameDVR","Windows_GameConfig","Power_High")
-        }
-        4 {
-            SetDword $MM "NetworkThrottlingIndex" 0xffffffff
-            SetDword $MM "SystemResponsiveness" 0
-            SetDword $Games "GPU Priority" 8
-            SetDword $Games "Priority" 6
-            SetString $Games "Scheduling Category" "High"
-            SetDword $GameDVR "AppCaptureEnabled" 0
-            SetDword $GameConfig "GameDVR_Enabled" 0
-            ApplyMouse
-            ApplyNetworkSafe
-            ApplyPowerHigh
-            SaveState @("Profile_4","FiveM_NetworkThrottle","FiveM_SystemResponse","FiveM_GPU","FiveM_GamePriority","FiveM_Scheduling","Windows_GameDVR","Windows_GameConfig","Mouse_Input","Network_AutoTuning","Power_High")
+function Remove-ConsumerApps {
+    $patterns=@(
+        'Microsoft.BingNews','Microsoft.BingWeather','Microsoft.GetHelp',
+        'Microsoft.Getstarted','Microsoft.MicrosoftSolitaireCollection',
+        'Microsoft.People','Microsoft.PowerAutomateDesktop','Microsoft.Todos',
+        'Microsoft.WindowsFeedbackHub','Microsoft.XboxApp','Microsoft.XboxGamingOverlay',
+        'Microsoft.XboxGameOverlay','Microsoft.XboxIdentityProvider','Microsoft.XboxSpeechToTextOverlay'
+    )
+    foreach($pat in $patterns){
+        Get-AppxPackage -AllUsers -Name $pat -ErrorAction SilentlyContinue | ForEach-Object {
+            try { Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction Stop; Log "Removed: $($_.Name)" } catch { Log "Skipped: $($_.Name)" }
         }
     }
-    SaveState @("Profile_$level")
-    Write-Host "✓ PROFILE $level applied" -ForegroundColor Green
+    $script:State.AppCleanup=$true
+    Log 'Consumer app cleanup completed'
 }
 
-function PerformanceMenu {
-    while($true) {
-        Header "🚀 PERFORMANCE"
-        Write-Host "[1] 🟢 LOW       เบา / ปลอดภัย"
-        Write-Host "[2] 🔵 MEDIUM    สมดุล"
-        Write-Host "[3] 🟠 HIGH      เน้นประสิทธิภาพ"
-        Write-Host "[4] 🔴 MAX       เต็มสุด"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        if($x -match "^[1-4]$"){ ApplyProfile ([int]$x); PauseMenu }
+function Apply-Services {
+    # Conservative list: do not touch Windows Update, Defender, Audio, Network, DHCP, DNS, RPC, etc.
+    $services=@('DiagTrack','dmwappushservice','MapsBroker','RetailDemo')
+    foreach($name in $services){
+        $svc=Get-Service -Name $name -ErrorAction SilentlyContinue
+        if($svc){
+            try{
+                if($svc.Status -ne 'Stopped'){ Stop-Service -Name $name -Force -ErrorAction SilentlyContinue }
+                Set-Service -Name $name -StartupType Disabled -ErrorAction Stop
+                Log "Service disabled: $name"
+            }catch{ Log "Service skipped: $name" }
+        }
+    }
+    $script:State.Services=$true
+    Log 'Selected non-essential services processed'
+}
+
+function Apply-Debloat {
+    try {
+        $b=New-Backup
+        Log "Backup created: $b"
+        Apply-Privacy
+        Remove-ConsumerApps
+        Apply-Services
+        $script:State.DebloatRun=$true
+        $script:State.LastAction='DEBLOAT'
+        $script:State.LastRun=(Get-Date).ToString('s')
+        Save-State
+        Log 'DEBLOAT completed'
+        [System.Windows.Forms.MessageBox]::Show("Debloat เสร็จแล้ว`n`nBackup:`n$b`n`nแนะนำ Restart Windows",'LARZONE DEBLOAT',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    } catch {
+        Log "ERROR: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message,'ERROR',[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     }
 }
 
-function FiveMMenu {
-    while($true) {
-        Header "🎮 FIVEM / GAME"
-        StatusLine "1" "GPU Priority = 8" (RegMatch $Games "GPU Priority" 8) "FiveM_GPU"
-        StatusLine "2" "Game Priority = 6" (RegMatch $Games "Priority" 6) "FiveM_GamePriority"
-        StatusLine "3" "Scheduling = High" (RegMatch $Games "Scheduling Category" "High") "FiveM_Scheduling"
-        StatusLine "4" "NetworkThrottlingIndex = FFFFFFFF" (RegMatch $MM "NetworkThrottlingIndex" 4294967295) "FiveM_NetworkThrottle"
-        StatusLine "5" "SystemResponsiveness = 0" (RegMatch $MM "SystemResponsiveness" 0) "FiveM_SystemResponse"
-        StatusLine "6" "High Performance Power" ((powercfg /getactivescheme) -match "High performance") "Power_High"
-        StatusLine "7" "FiveM Cache Cleaned" $false "FiveM_Cache"
-        Write-Host "[8] Game Profile / current values"
-        Write-Host "[9] Streaming Profile / current values"
-        Write-Host "[10] FiveM Status"
-        Write-Host "[11] Apply GPU/Game pack"
-        Write-Host "[12] Apply Multimedia pack"
-        Write-Host "[13] Clean FiveM Cache"
-        Write-Host "[14] Show current values"
-        Write-Host "[15] APPLY ALL FIVEM"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        switch($x) {
-            "1"{Backup|Out-Null;SetDword $Games "GPU Priority" 8;SaveState @("FiveM_GPU");Write-Host "✓ GPU Priority = 8" -f Green}
-            "2"{Backup|Out-Null;SetDword $Games "Priority" 6;SaveState @("FiveM_GamePriority");Write-Host "✓ Game Priority = 6" -f Green}
-            "3"{Backup|Out-Null;SetString $Games "Scheduling Category" "High";SaveState @("FiveM_Scheduling");Write-Host "✓ Scheduling = High" -f Green}
-            "4"{Backup|Out-Null;SetDword $MM "NetworkThrottlingIndex" 0xffffffff;SaveState @("FiveM_NetworkThrottle");Write-Host "✓ NetworkThrottlingIndex = FFFFFFFF" -f Green}
-            "5"{Backup|Out-Null;SetDword $MM "SystemResponsiveness" 0;SaveState @("FiveM_SystemResponse");Write-Host "✓ SystemResponsiveness = 0" -f Green}
-            "6"{ApplyPowerHigh}
-            "7"{Write-Host "Cache state: $(if(WasRun 'FiveM_Cache'){'LARZONE APPLIED'}else{'NOT RUN BY LARZONE'})"}
-            "8"{Get-ItemProperty $Games -ErrorAction SilentlyContinue|Select "GPU Priority",Priority,"Scheduling Category"|Format-List}
-            "9"{Get-ItemProperty $MM -ErrorAction SilentlyContinue|Select NetworkThrottlingIndex,SystemResponsiveness|Format-List}
-            "10"{Get-Process FiveM -ErrorAction SilentlyContinue|Select Id,CPU,WorkingSet,Responding|Format-List}
-            "11"{Backup|Out-Null;SetDword $Games "GPU Priority" 8;SetDword $Games "Priority" 6;SetString $Games "Scheduling Category" "High";SaveState @("FiveM_GPU","FiveM_GamePriority","FiveM_Scheduling");Write-Host "✓ GPU/Game pack applied" -f Green}
-            "12"{Backup|Out-Null;SetDword $MM "NetworkThrottlingIndex" 0xffffffff;SetDword $MM "SystemResponsiveness" 0;SaveState @("FiveM_NetworkThrottle","FiveM_SystemResponse");Write-Host "✓ Multimedia pack applied" -f Green}
-            "13"{CleanFiveMCache}
-            "14"{Get-ItemProperty $Games -ErrorAction SilentlyContinue|Select "GPU Priority",Priority,"Scheduling Category"|Format-List;Get-ItemProperty $MM -ErrorAction SilentlyContinue|Select NetworkThrottlingIndex,SystemResponsiveness|Format-List;powercfg /getactivescheme}
-            "15"{ApplyFiveMCore;ApplyPowerHigh}
-        }
-        PauseMenu
+# -------------------- Status --------------------
+function Show-Status {
+    $f=New-Object System.Windows.Forms.Form
+    $f.Text='LARZONE — CHECK DEBLOAT STATUS'
+    $f.Size=New-Object System.Drawing.Size(900,560)
+    $f.StartPosition='CenterScreen'
+    $f.BackColor=[Drawing.Color]::FromArgb(12,14,19)
+
+    $g=New-Object System.Windows.Forms.DataGridView
+    $g.Location=New-Object System.Drawing.Point(20,70)
+    $g.Size=New-Object System.Drawing.Size(840,380)
+    $g.ReadOnly=$true; $g.AllowUserToAddRows=$false; $g.RowHeadersVisible=$false
+    $g.AutoSizeColumnsMode='Fill'
+    $g.BackgroundColor=[Drawing.Color]::FromArgb(20,23,30)
+    $g.DefaultCellStyle.BackColor=[Drawing.Color]::FromArgb(25,28,36)
+    $g.DefaultCellStyle.ForeColor=[Drawing.Color]::White
+    $f.Controls.Add($g)
+
+    $t=New-Object System.Windows.Forms.Label
+    $t.Text='🔎 CHECK STATUS — คลิก REFRESH เพื่ออ่านสถานะล่าสุด'
+    $t.ForeColor=[Drawing.Color]::White; $t.Font=New-Object Drawing.Font('Segoe UI',15,[Drawing.FontStyle]::Bold)
+    $t.Location=New-Object Drawing.Point(20,20); $t.AutoSize=$true; $f.Controls.Add($t)
+
+    function Refresh-Status {
+        $data=@(
+            [pscustomobject]@{Item='DEBLOAT'; Status=if($script:State.DebloatRun){'✓ ใช้แล้ว'}else{'—'}},
+            [pscustomobject]@{Item='Privacy / Consumer Suggestions'; Status=if($script:State.Privacy){'✓ ใช้แล้ว'}else{'—'}},
+            [pscustomobject]@{Item='Consumer App Cleanup'; Status=if($script:State.AppCleanup){'✓ ใช้แล้ว'}else{'—'}},
+            [pscustomobject]@{Item='Selected Services'; Status=if($script:State.Services){'✓ ใช้แล้ว'}else{'—'}},
+            [pscustomobject]@{Item='Last Action'; Status=$script:State.LastAction},
+            [pscustomobject]@{Item='Last Run'; Status=$script:State.LastRun},
+            [pscustomobject]@{Item='Backup'; Status=$script:State.BackupPath}
+        )
+        $g.DataSource=$null; $g.DataSource=$data
     }
+    New-Button $f '↻ REFRESH' 20 465 180 40 {Refresh-Status}
+    New-Button $f '← BACK' 215 465 180 40 {$f.Close()}
+    Refresh-Status
+    [void]$f.ShowDialog()
 }
 
-function NetworkMenu {
-    while($true) {
-        Header "🌐 NETWORK"
-        $tcp=(netsh int tcp show global | Out-String)
-        StatusLine "1" "TCP Auto-Tuning = Normal" ($tcp -match "Receive Window Auto-Tuning Level.*normal") "Network_AutoTuning"
-        Write-Host "[2] TCP Global Status"
-        Write-Host "[3] Network Adapter Status"
-        Write-Host "[4] Link Speed"
-        Write-Host "[5] Adapter Power Management"
-        Write-Host "[6] DNS Servers"
-        Write-Host "[7] Network Profile"
-        Write-Host "[8] IPv4 Configuration"
-        Write-Host "[9] IPv6 Configuration"
-        Write-Host "[10] Active Adapter"
-        Write-Host "[11] TCP Supplemental"
-        Write-Host "[12] TCP ECN Status"
-        Write-Host "[13] TCP Timestamps"
-        Write-Host "[14] Full Network Status"
-        Write-Host "[15] APPLY TCP SAFE"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        switch($x) {
-            "1"{ApplyNetworkSafe}
-            "2"{netsh int tcp show global}
-            "3"{Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize}
-            "4"{Get-NetAdapter|Where Status -eq Up|Format-Table Name,LinkSpeed -AutoSize}
-            "5"{Get-NetAdapterPowerManagement -Name *|Format-List}
-            "6"{Get-DnsClientServerAddress -AddressFamily IPv4|Format-Table InterfaceAlias,ServerAddresses -AutoSize}
-            "7"{Get-NetConnectionProfile|Format-Table Name,InterfaceAlias,NetworkCategory -AutoSize}
-            "8"{Get-NetIPConfiguration|Format-List}
-            "9"{Get-NetIPConfiguration|Select InterfaceAlias,IPv6Address|Format-List}
-            "10"{Get-NetAdapter|Where Status -eq Up|Format-Table Name,InterfaceDescription,LinkSpeed -AutoSize}
-            "11"{netsh int tcp show supplemental}
-            "12"{netsh int tcp show global|Select-String "ECN"}
-            "13"{netsh int tcp show global|Select-String "timestamps"}
-            "14"{netsh int tcp show global;Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize}
-            "15"{ApplyNetworkSafe}
-        }
-        PauseMenu
-    }
+# -------------------- UI --------------------
+function New-Button($Parent,$Text,$X,$Y,$W,$H,$Action){
+    $b=New-Object System.Windows.Forms.Button
+    $b.Text=$Text; $b.Location=New-Object Drawing.Point($X,$Y); $b.Size=New-Object Drawing.Size($W,$H)
+    $b.FlatStyle='Flat'; $b.FlatAppearance.BorderSize=1
+    $b.BackColor=[Drawing.Color]::FromArgb(28,31,40); $b.ForeColor=[Drawing.Color]::White
+    $b.Font=New-Object Drawing.Font('Segoe UI',10,[Drawing.FontStyle]::Bold); $b.Cursor='Hand'
+    $b.Add_MouseEnter({$this.BackColor=[Drawing.Color]::FromArgb(48,52,66)})
+    $b.Add_MouseLeave({$this.BackColor=[Drawing.Color]::FromArgb(28,31,40)})
+    $b.Add_Click($Action); $Parent.Controls.Add($b); return $b
 }
 
-function MouseMenu {
-    while($true) {
-        Header "🖱 MOUSE / INPUT"
-        StatusLine "1" "Mouse Acceleration OFF" ((RegMatch $Mouse "MouseSpeed" 0) -and (RegMatch $Mouse "MouseThreshold1" 0) -and (RegMatch $Mouse "MouseThreshold2" 0)) "Mouse_Input"
-        StatusLine "2" "MouseSpeed = 0" (RegMatch $Mouse "MouseSpeed" 0) "Mouse_Input"
-        StatusLine "3" "MouseThreshold1 = 0" (RegMatch $Mouse "MouseThreshold1" 0) "Mouse_Input"
-        StatusLine "4" "MouseThreshold2 = 0" (RegMatch $Mouse "MouseThreshold2" 0) "Mouse_Input"
-        Write-Host "[5] Apply Input Pack"
-        Write-Host "[6] Show Mouse Values"
-        Write-Host "[7] Show Keyboard Values"
-        Write-Host "[8] Pointer Scheme"
-        Write-Host "[9] Mouse Keys Status"
-        Write-Host "[10] HID Devices"
-        Write-Host "[11] Mouse Devices"
-        Write-Host "[12] Keyboard Devices"
-        Write-Host "[13] Input Device Status"
-        Write-Host "[14] Open Mouse Settings"
-        Write-Host "[15] APPLY ALL INPUT"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        switch($x) {
-            "1"{ApplyMouse}
-            "2"{Backup|Out-Null;SetDword $Mouse "MouseSpeed" 0;SaveState @("Mouse_Input");Write-Host "✓ MouseSpeed = 0" -f Green}
-            "3"{Backup|Out-Null;SetDword $Mouse "MouseThreshold1" 0;SaveState @("Mouse_Input");Write-Host "✓ Threshold1 = 0" -f Green}
-            "4"{Backup|Out-Null;SetDword $Mouse "MouseThreshold2" 0;SaveState @("Mouse_Input");Write-Host "✓ Threshold2 = 0" -f Green}
-            "5"{ApplyMouse}
-            "6"{Get-ItemProperty $Mouse|Select MouseSpeed,MouseThreshold1,MouseThreshold2,MouseSensitivity,MouseScheme|Format-List}
-            "7"{Get-ItemProperty "HKCU:\Control Panel\Keyboard"|Format-List}
-            "8"{Get-ItemProperty $Mouse|Select MouseScheme|Format-List}
-            "9"{Get-ItemProperty $Mouse|Select MouseKeys|Format-List}
-            "10"{Get-PnpDevice -Class HIDClass|Format-Table FriendlyName,Status -AutoSize}
-            "11"{Get-PnpDevice -Class Mouse|Format-Table FriendlyName,Status -AutoSize}
-            "12"{Get-PnpDevice -Class Keyboard|Format-Table FriendlyName,Status -AutoSize}
-            "13"{Get-PnpDevice -Class Mouse,Keyboard|Format-Table Class,FriendlyName,Status -AutoSize}
-            "14"{Start-Process "ms-settings:mousetouchpad"}
-            "15"{ApplyMouse}
-        }
-        PauseMenu
-    }
-}
+$main=New-Object System.Windows.Forms.Form
+$main.Text='LARZONE DEBLOAT — FiveM'
+$main.Size=New-Object Drawing.Size(1050,680)
+$main.StartPosition='CenterScreen'
+$main.BackColor=[Drawing.Color]::FromArgb(10,12,17)
 
-function CpuRamMenu {
-    while($true) {
-        Header "🧠 CPU / RAM"
-        Write-Host "[1] CPU Core Count"
-        Write-Host "[2] Logical Processor Count"
-        Write-Host "[3] CPU Model"
-        Write-Host "[4] CPU Max Clock"
-        Write-Host "[5] CPU Load"
-        Write-Host "[6] RAM Total"
-        Write-Host "[7] RAM Used"
-        Write-Host "[8] RAM Free"
-        Write-Host "[9] RAM Load"
-        Write-Host "[10] CPU Details"
-        Write-Host "[11] Memory Details"
-        $high=((powercfg /getactivescheme) -match "High performance")
-        if(WasRun "Power_High"){$tag="● LARZONE APPLIED"}elseif($high){$tag="● MATCHED"}else{$tag="○ NOT SET"}
-        Write-Host "[12] $tag  High Performance Power"
-        Write-Host "[13] Balanced Power"
-        Write-Host "[14] Active Power Plan"
-        Write-Host "[15] APPLY HIGH PERFORMANCE"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        switch($x) {
-            "1"{(Get-CimInstance Win32_Processor).NumberOfCores|Write-Host}
-            "2"{(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors|Write-Host}
-            "3"{(Get-CimInstance Win32_Processor).Name|Write-Host}
-            "4"{(Get-CimInstance Win32_Processor).MaxClockSpeed|Write-Host}
-            "5"{Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1|Select -Expand CounterSamples|Select CookedValue|Format-List}
-            "6"{Get-CimInstance Win32_ComputerSystem|Select @{N="RAM_GB";E={[math]::Round($_.TotalPhysicalMemory/1GB,1)}}|Format-List}
-            "7"{Get-CimInstance Win32_OperatingSystem|Select @{N="Used_GB";E={[math]::Round(($_.TotalVisibleMemorySize-$_.FreePhysicalMemory)/1MB,1)}}|Format-List}
-            "8"{Get-CimInstance Win32_OperatingSystem|Select @{N="Free_GB";E={[math]::Round($_.FreePhysicalMemory/1MB,1)}}|Format-List}
-            "9"{Get-CimInstance Win32_OperatingSystem|Select @{N="RAM_Used_%";E={[math]::Round((1-($_.FreePhysicalMemory/$_.TotalVisibleMemorySize))*100,1)}}|Format-List}
-            "10"{Get-CimInstance Win32_Processor|Select Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed|Format-List}
-            "11"{Get-CimInstance Win32_PhysicalMemory|Select Manufacturer,Capacity,Speed,PartNumber|Format-Table -AutoSize}
-            "12"{ApplyPowerHigh}
-            "13"{ApplyPowerBalanced}
-            "14"{powercfg /getactivescheme}
-            "15"{ApplyPowerHigh}
-        }
-        PauseMenu
-    }
-}
+$panel=New-Object System.Windows.Forms.Panel
+$panel.Location=New-Object Drawing.Point(20,20); $panel.Size=New-Object Drawing.Size(995,620)
+$panel.BackColor=[Drawing.Color]::FromArgb(20,23,30); $main.Controls.Add($panel)
 
-function WindowsMenu {
-    while($true) {
-        Header "🪟 WINDOWS"
-        StatusLine "1" "GameDVR OFF" (RegMatch $GameDVR "AppCaptureEnabled" 0) "Windows_GameDVR"
-        StatusLine "2" "GameConfigStore OFF" (RegMatch $GameConfig "GameDVR_Enabled" 0) "Windows_GameConfig"
-        Write-Host "[3] Game Mode Status"
-        Write-Host "[4] Windows Version"
-        Write-Host "[5] Windows Build"
-        Write-Host "[6] Uptime"
-        Write-Host "[7] Startup Apps"
-        Write-Host "[8] Running Services Count"
-        Write-Host "[9] Active Power Plan"
-        Write-Host "[10] Hardware GPU Scheduler"
-        Write-Host "[11] Windows Update Status"
-        Write-Host "[12] Background Services Count"
-        Write-Host "[13] Gaming Settings Status"
-        Write-Host "[14] Open Gaming Settings"
-        Write-Host "[15] APPLY WINDOWS SAFE"
-        Write-Host ""
-        Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
-        $x=(Read-Host "เลือก").ToUpper(); ExitIfZero $x
-        if($x -eq "B"){return}
-        switch($x) {
-            "1"{Backup|Out-Null;SetDword $GameDVR "AppCaptureEnabled" 0;SaveState @("Windows_GameDVR");Write-Host "✓ GameDVR OFF" -f Green}
-            "2"{Backup|Out-Null;SetDword $GameConfig "GameDVR_Enabled" 0;SaveState @("Windows_GameConfig");Write-Host "✓ GameConfigStore OFF" -f Green}
-            "3"{Get-ItemProperty "HKCU:\Software\Microsoft\GameBar" -ErrorAction SilentlyContinue|Select AutoGameModeEnabled|Format-List}
-            "4"{Get-CimInstance Win32_OperatingSystem|Select Caption,Version|Format-List}
-            "5"{[Environment]::OSVersion.Version|Write-Host}
-            "6"{(Get-CimInstance Win32_OperatingSystem).LastBootUpTime}
-            "7"{Get-CimInstance Win32_StartupCommand|Select Name,Command|Format-Table -AutoSize}
-            "8"{Get-Service|Where Status -eq Running|Measure-Object|Select Count|Format-List}
-            "9"{powercfg /getactivescheme}
-            "10"{Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" -ErrorAction SilentlyContinue|Select HwSchMode|Format-List}
-            "11"{Get-Service wuauserv|Select Status,StartType|Format-List}
-            "12"{Get-Service|Where Status -eq Running|Measure-Object|Select Count|Format-List}
-            "13"{Get-ItemProperty "HKCU:\Software\Microsoft\GameBar" -ErrorAction SilentlyContinue|Format-List}
-            "14"{Start-Process "ms-settings:gaming"}
-            "15"{ApplyWindowsSafe}
-        }
-        PauseMenu
-    }
-}
+$head=New-Object System.Windows.Forms.Label
+$head.Text='LARZONE  //  DEBLOAT'
+$head.ForeColor=[Drawing.Color]::White; $head.Font=New-Object Drawing.Font('Segoe UI',26,[Drawing.FontStyle]::Bold)
+$head.Location=New-Object Drawing.Point(30,25); $head.AutoSize=$true; $panel.Controls.Add($head)
 
-function StatusMenu {
-    Header "📊 STATUS"
-    Write-Host ""
-    Write-Host "Larzone state: " -NoNewline
-    if(Test-Path $StateFile){Write-Host "AVAILABLE" -ForegroundColor Green}else{Write-Host "EMPTY" -ForegroundColor Yellow}
-    Write-Host "State file: $StateFile"
-    $latest=Get-ChildItem $BackupDir -Directory|Sort-Object Name -Descending|Select-Object -First 1
-    Write-Host "Latest backup: " -NoNewline
-    if($latest){Write-Host $latest.Name -ForegroundColor Green}else{Write-Host "NONE" -ForegroundColor Yellow}
-    Write-Host ""
-    Write-Host "FiveM core:"
-    StatusLine "GPU" "GPU Priority = 8" (RegMatch $Games "GPU Priority" 8) "FiveM_GPU"
-    StatusLine "PRI" "Game Priority = 6" (RegMatch $Games "Priority" 6) "FiveM_GamePriority"
-    StatusLine "SCH" "Scheduling = High" (RegMatch $Games "Scheduling Category" "High") "FiveM_Scheduling"
-    StatusLine "NET" "NetworkThrottlingIndex = FFFFFFFF" (RegMatch $MM "NetworkThrottlingIndex" 4294967295) "FiveM_NetworkThrottle"
-    StatusLine "SYS" "SystemResponsiveness = 0" (RegMatch $MM "SystemResponsiveness" 0) "FiveM_SystemResponse"
-    Write-Host ""
-    Write-Host "Windows:"
-    StatusLine "DVR" "GameDVR OFF" (RegMatch $GameDVR "AppCaptureEnabled" 0) "Windows_GameDVR"
-    StatusLine "CFG" "GameConfigStore OFF" (RegMatch $GameConfig "GameDVR_Enabled" 0) "Windows_GameConfig"
-    Write-Host ""
-    Write-Host "Input:"
-    StatusLine "MOU" "Mouse acceleration OFF" ((RegMatch $Mouse "MouseSpeed" 0) -and (RegMatch $Mouse "MouseThreshold1" 0) -and (RegMatch $Mouse "MouseThreshold2" 0)) "Mouse_Input"
-    PauseMenu
-}
+$sub=New-Object System.Windows.Forms.Label
+$sub.Text='FiveM / Gaming focused • Safe-first • Backup before changes'
+$sub.ForeColor=[Drawing.Color]::Silver; $sub.Location=New-Object Drawing.Point(34,70); $sub.AutoSize=$true; $panel.Controls.Add($sub)
 
-function MainMenu {
-    while($true) {
-        Header "HOME"
-        Write-Host "║              WINDOWS • FIVEM • PERFORMANCE               ║" -ForegroundColor Gray
-        Write-Host "╠══════════════════════════════════════════════════════════════╣" -ForegroundColor DarkCyan
-        Write-Host ""
-        Write-Host "🚀 PERFORMANCE" -ForegroundColor Green
-        Write-Host " [1] 🟢 LOW       เบา / ปลอดภัย"
-        Write-Host " [2] 🔵 MEDIUM    สมดุล"
-        Write-Host " [3] 🟠 HIGH      เน้นประสิทธิภาพ"
-        Write-Host " [4] 🔴 MAX       รวมชุดเต็ม"
-        Write-Host ""
-        Write-Host "🛠 TOOLS" -ForegroundColor Cyan
-        Write-Host " [5] 🎮 FiveM"
-        Write-Host " [6] 🌐 Network"
-        Write-Host " [7] 🖱 Mouse / Input"
-        Write-Host " [8] 🧠 CPU / RAM"
-        Write-Host " [9] 🪟 Windows"
-        Write-Host ""
-        Write-Host " ⚙ [C] Custom/Status     ♻ [R] Restore     📊 [S] Status"
-        Write-Host " ❌ [0] Exit" -ForegroundColor Yellow
-        Footer
-        $x=(Read-Host "`nเลือกเมนู").ToUpper()
-        switch($x) {
-            "1"{ApplyProfile 1;PauseMenu}
-            "2"{ApplyProfile 2;PauseMenu}
-            "3"{ApplyProfile 3;PauseMenu}
-            "4"{ApplyProfile 4;PauseMenu}
-            "5"{FiveMMenu}
-            "6"{NetworkMenu}
-            "7"{MouseMenu}
-            "8"{CpuRamMenu}
-            "9"{WindowsMenu}
-            "C"{StatusMenu}
-            "R"{RestoreLatest}
-            "S"{StatusMenu}
-            "0"{exit}
-        }
-    }
-}
+$run=New-Button $panel '⚡ RUN DEBLOAT' 35 120 410 65 {Apply-Debloat}
+$run.BackColor=[Drawing.Color]::FromArgb(45,55,72)
+$run.Font=New-Object Drawing.Font('Segoe UI',15,[Drawing.FontStyle]::Bold)
+New-Button $panel '🔎 CHECK STATUS' 35 200 410 55 {Show-Status}
+New-Button $panel '💾 BACKUP NOW' 35 270 200 50 {try{ $b=New-Backup; Log "Backup: $b" }catch{Log $_.Exception.Message}}
+New-Button $panel '↩ RESTORE' 245 270 200 50 {Restore-Backup}
+New-Button $panel '❌ EXIT' 35 340 410 50 {$main.Close()}
 
-NeedAdmin
-LoadState
-MainMenu
+$note=New-Object System.Windows.Forms.Label
+$note.Text="สิ่งที่โปรแกรมนี้ไม่แตะ:`n• BCD / boot options`n• Win32PrioritySeparation`n• NetworkThrottlingIndex`n• Keyboard / Mouse queue`n• Windows Update / Defender / Audio / Network core services"
+$note.ForeColor=[Drawing.Color]::LightGray; $note.Font=New-Object Drawing.Font('Segoe UI',10)
+$note.Location=New-Object Drawing.Point(500,125); $note.AutoSize=$true; $panel.Controls.Add($note)
+
+$script:LogBox=New-Object System.Windows.Forms.TextBox
+$script:LogBox.Multiline=$true; $script:LogBox.ReadOnly=$true; $script:LogBox.ScrollBars='Vertical'
+$script:LogBox.Location=New-Object Drawing.Point(500,270); $script:LogBox.Size=New-Object Drawing.Size(455,300)
+$script:LogBox.BackColor=[Drawing.Color]::FromArgb(10,12,17); $script:LogBox.ForeColor=[Drawing.Color]::Gainsboro
+$script:LogBox.Font=New-Object Drawing.Font('Consolas',9); $panel.Controls.Add($script:LogBox)
+Log "Ready. Last action: $($script:State.LastAction)"
+
+[void]$main.ShowDialog()
