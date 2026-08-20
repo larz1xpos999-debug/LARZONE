@@ -14,15 +14,36 @@ function Header($title="LARZONE TUNE"){
  Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 }
 function P { Read-Host "`nกด Enter เพื่อกลับเมนู" | Out-Null }
+function State($ok,$target=""){
+ if($ok){Write-Host "● APPLIED" -ForegroundColor Green}
+ elseif($target){Write-Host "○ NOT SET / DIFFERENT" -ForegroundColor Yellow}
+ else{Write-Host "○ NOT SET" -ForegroundColor Yellow}
+}
+function RegState($path,$name,$target){
+ try{$v=(Get-ItemProperty -Path $path -Name $name -ErrorAction Stop).$name;State ([string]$v -eq [string]$target) $target}
+ catch{State $false $target}
+}
 function Back { Write-Host ""; Write-Host "[B] BACK    [0] EXIT" -ForegroundColor Yellow }
 function WaitBack { Read-Host "กด Enter เพื่อกลับ" | Out-Null }
 
 function Backup {
- if(!(Test-Path "$bak\game.reg")){
-  reg.exe export "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" "$bak\game.reg" /y|Out-Null
-  reg.exe export "HKCU\System\GameConfigStore" "$bak\config.reg" /y|Out-Null
-  reg.exe export "HKCU\Control Panel\Mouse" "$bak\mouse.reg" /y|Out-Null
+ $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+ $script:CurrentBackup=Join-Path $bak $stamp
+ New-Item $script:CurrentBackup -ItemType Directory -Force|Out-Null
+
+ $items=@(
+  @("GameDVR","HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR"),
+  @("GameConfigStore","HKCU\System\GameConfigStore"),
+  @("Mouse","HKCU\Control Panel\Mouse"),
+  @("Multimedia","HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"),
+  @("Psched","HKLM\SOFTWARE\Policies\Microsoft\Windows\Psched")
+ )
+ foreach($i in $items){
+  reg.exe export $i[1] (Join-Path $script:CurrentBackup "$($i[0]).reg") /y 2>$null|Out-Null
  }
+ powercfg /getactivescheme | Out-File (Join-Path $script:CurrentBackup "PowerPlan.txt") -Encoding utf8
+ netsh int tcp show global | Out-File (Join-Path $script:CurrentBackup "TCP_Global.txt") -Encoding utf8
+ Write-Host "✓ Backup: $script:CurrentBackup" -ForegroundColor DarkGray
 }
 
 function Profile($name){
@@ -105,7 +126,20 @@ function FiveMMenu{
    "9"{Profile "HIGH"}
    "10"{Profile "MEDIUM"}
    "11"{MouseMenu}
-   "12"{Write-Host "FiveM cache cleanup is manual in this safe build." -f Yellow;P}
+   "12"{
+    Backup
+    $paths=@(
+      "$env:LOCALAPPDATA\FiveM\FiveM.app\data\cache",
+      "$env:LOCALAPPDATA\FiveM\FiveM.app\data\server-cache",
+      "$env:LOCALAPPDATA\FiveM\FiveM.app\data\server-cache-priv"
+    )
+    foreach($d in $paths){
+      if(Test-Path $d){
+        Get-ChildItem $d -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+    Write-Host "✓ FiveM cache cleaned" -f Green
+  }
    "13"{Profile "HIGH"}
    "14"{Write-Host "FiveM profile / GameDVR status shown by current registry values.";Get-ItemProperty $g -ErrorAction SilentlyContinue|Select "GPU Priority",Priority,"Scheduling Category"|Format-List;P}
    "15"{Profile "MAX"}
@@ -116,27 +150,26 @@ function FiveMMenu{
 function NetworkMenu{
  while($true){
   Header "🌐 NETWORK"
-  Write-Host "[1] NetworkThrottlingIndex = FFFFFFFF";Write-Host "[2] SystemResponsiveness = 0";Write-Host "[3] TCP Auto-Tuning = Normal";Write-Host "[4] NonBestEffortLimit = 80";Write-Host "[5] Check Adapter";Write-Host "[6] Check Link Speed";Write-Host "[7] Adapter Power Status";Write-Host "[8] TCP Global Status";Write-Host "[9] DNS Display";Write-Host "[10] Network Profile";Write-Host "[11] Apply TCP Normal";Write-Host "[12] Apply Multimedia Network";Write-Host "[13] Apply QoS Value";Write-Host "[14] Show Network Status";Write-Host "[15] APPLY ALL"
-  Write-Host ""; Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow;$x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
-  $mm="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+  Write-Host "[1] TCP Auto-Tuning";Write-Host "[2] TCP Global Status";Write-Host "[3] Adapter Status";Write-Host "[4] Link Speed";Write-Host "[5] Adapter Power";Write-Host "[6] DNS Servers";Write-Host "[7] Network Profile";Write-Host "[8] IPv4 Config";Write-Host "[9] IPv6 Config";Write-Host "[10] Active Adapter";Write-Host "[11] TCP Congestion";Write-Host "[12] TCP ECN Status";Write-Host "[13] TCP Timestamps";Write-Host "[14] Network Status";Write-Host "[15] APPLY NETWORK SAFE"
+  Write-Host "";Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
+  $x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
   switch($x){
-   "1"{Backup;New-Item $mm -Force|Out-Null;Set-ItemProperty $mm NetworkThrottlingIndex 0xffffffff -Type DWord -Force}
-   "2"{Backup;New-Item $mm -Force|Out-Null;Set-ItemProperty $mm SystemResponsiveness 0 -Type DWord -Force}
-   "3"{netsh int tcp set global autotuninglevel=normal|Out-Null}
-   "4"{Backup;$q="HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched";New-Item $q -Force|Out-Null;Set-ItemProperty $q NonBestEffortLimit 80 -Type DWord -Force}
-   "5"{Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize;P}
-   "6"{Get-NetAdapter|Where Status -eq Up|Format-Table Name,LinkSpeed -AutoSize;P}
-   "7"{Get-NetAdapterPowerManagement -Name * -ErrorAction SilentlyContinue|Format-List;P}
-   "8"{netsh int tcp show global;P}
-   "9"{Get-DnsClientServerAddress -AddressFamily IPv4|Format-Table InterfaceAlias,ServerAddresses -AutoSize;P}
-   "10"{Get-NetConnectionProfile|Format-Table Name,InterfaceAlias,NetworkCategory -AutoSize;P}
-   "11"{netsh int tcp set global autotuninglevel=normal|Out-Null}
-   "12"{Backup;New-Item $mm -Force|Out-Null;Set-ItemProperty $mm NetworkThrottlingIndex 0xffffffff -Type DWord -Force;Set-ItemProperty $mm SystemResponsiveness 0 -Type DWord -Force}
-   "13"{Backup;$q="HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched";New-Item $q -Force|Out-Null;Set-ItemProperty $q NonBestEffortLimit 80 -Type DWord -Force}
-   "14"{netsh int tcp show global;Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize;P}
-   "15"{Profile "MAX"}
+   "1"{netsh int tcp set global autotuninglevel=normal|Out-Null;Write-Host "✓ TCP Auto-Tuning = Normal" -f Green;P}
+   "2"{netsh int tcp show global;P}
+   "3"{Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize;P}
+   "4"{Get-NetAdapter|Where Status -eq Up|Format-Table Name,LinkSpeed -AutoSize;P}
+   "5"{Get-NetAdapterPowerManagement -Name * -ErrorAction SilentlyContinue|Format-List;P}
+   "6"{Get-DnsClientServerAddress -AddressFamily IPv4|Format-Table InterfaceAlias,ServerAddresses -AutoSize;P}
+   "7"{Get-NetConnectionProfile|Format-Table Name,InterfaceAlias,NetworkCategory -AutoSize;P}
+   "8"{Get-NetIPConfiguration -ErrorAction SilentlyContinue|Format-List;P}
+   "9"{Get-NetIPConfiguration -ErrorAction SilentlyContinue|Select InterfaceAlias,IPv6Address|Format-List;P}
+   "10"{Get-NetAdapter|Where Status -eq Up|Format-Table Name,InterfaceDescription,LinkSpeed -AutoSize;P}
+   "11"{netsh int tcp show supplemental;P}
+   "12"{netsh int tcp show global|Select-String "ECN";P}
+   "13"{netsh int tcp show global|Select-String "timestamps";P}
+   "14"{Get-NetAdapter|Format-Table Name,Status,LinkSpeed -AutoSize;netsh int tcp show global;P}
+   "15"{netsh int tcp set global autotuninglevel=normal|Out-Null;Write-Host "✓ Network safe profile applied" -f Green;P}
   }
-  Write-Host "`n✓ DONE" -f Green;P
  }
 }
 function MouseMenu{
@@ -165,51 +198,52 @@ function MouseMenu{
 }
 function CpuRamMenu{
  while($true){
-  Header "🧠 CPU / RAM / SCHEDULER"
-  Write-Host "[1] GPU Priority = 8";Write-Host "[2] Game Priority = 6";Write-Host "[3] Scheduling = High";Write-Host "[4] SystemResponsiveness = 0";Write-Host "[5] NetworkThrottling = FFFFFFFF";Write-Host "[6] Balanced Power";Write-Host "[7] High Performance Power";Write-Host "[8] Multimedia Scheduler";Write-Host "[9] Game Profile";Write-Host "[10] CPU Core Count";Write-Host "[11] RAM Total";Write-Host "[12] RAM Usage";Write-Host "[13] CPU Load";Write-Host "[14] CPU Details";Write-Host "[15] APPLY ALL"
-  Write-Host ""; Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow;$x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
-  $mm="HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";$g="$mm\Tasks\Games"
+  Header "🧠 CPU / RAM"
+  Write-Host "[1] CPU Core Count";Write-Host "[2] Logical Processor Count";Write-Host "[3] CPU Model";Write-Host "[4] CPU Clock";Write-Host "[5] CPU Load";Write-Host "[6] RAM Total";Write-Host "[7] RAM Used";Write-Host "[8] RAM Free";Write-Host "[9] RAM Load";Write-Host "[10] CPU Details";Write-Host "[11] Memory Details";Write-Host "[12] Balanced Power";Write-Host "[13] High Performance Power";Write-Host "[14] Active Power Plan";Write-Host "[15] APPLY POWER PROFILE"
+  Write-Host "";Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
+  $x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
   switch($x){
-   "1"{Backup;New-Item $g -Force|Out-Null;Set-ItemProperty $g "GPU Priority" 8 -Type DWord -Force}
-   "2"{Backup;New-Item $g -Force|Out-Null;Set-ItemProperty $g Priority 6 -Type DWord -Force}
-   "3"{Backup;New-Item $g -Force|Out-Null;Set-ItemProperty $g "Scheduling Category" High -Type String -Force}
-   "4"{Backup;New-Item $mm -Force|Out-Null;Set-ItemProperty $mm SystemResponsiveness 0 -Type DWord -Force}
-   "5"{Backup;New-Item $mm -Force|Out-Null;Set-ItemProperty $mm NetworkThrottlingIndex 0xffffffff -Type DWord -Force}
-   "6"{powercfg /setactive SCHEME_BALANCED|Out-Null}
-   "7"{powercfg /setactive SCHEME_MIN|Out-Null}
-   "8"{Profile "HIGH"}
-   "9"{Profile "HIGH"}
-   "10"{[Environment]::ProcessorCount|Write-Host;P}
-   "11"{Get-CimInstance Win32_ComputerSystem|Select @{N="RAM_GB";E={[math]::Round($_.TotalPhysicalMemory/1GB,1)}}|Format-List;P}
-   "12"{Get-CimInstance Win32_OperatingSystem|Select @{N="Used_GB";E={[math]::Round(($_.TotalVisibleMemorySize-$_.FreePhysicalMemory)/1MB,1)}},@{N="Free_GB";E={[math]::Round($_.FreePhysicalMemory/1MB,1)}}|Format-List;P}
-   "13"{Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1|Select -Expand CounterSamples|Select CookedValue|Format-List;P}
-   "14"{Get-CimInstance Win32_Processor|Select Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed|Format-List;P}
-   "15"{Profile "MAX"}
-  };Write-Host "`n✓ DONE" -f Green;P
+   "1"{(Get-CimInstance Win32_Processor).NumberOfCores|Write-Host;P}
+   "2"{(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors|Write-Host;P}
+   "3"{(Get-CimInstance Win32_Processor).Name|Write-Host;P}
+   "4"{(Get-CimInstance Win32_Processor).MaxClockSpeed|Write-Host;P}
+   "5"{Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1|Select -Expand CounterSamples|Select CookedValue|Format-List;P}
+   "6"{Get-CimInstance Win32_ComputerSystem|Select @{N="RAM_GB";E={[math]::Round($_.TotalPhysicalMemory/1GB,1)}}|Format-List;P}
+   "7"{Get-CimInstance Win32_OperatingSystem|Select @{N="Used_GB";E={[math]::Round(($_.TotalVisibleMemorySize-$_.FreePhysicalMemory)/1MB,1)}}|Format-List;P}
+   "8"{Get-CimInstance Win32_OperatingSystem|Select @{N="Free_GB";E={[math]::Round($_.FreePhysicalMemory/1MB,1)}}|Format-List;P}
+   "9"{Get-CimInstance Win32_OperatingSystem|Select @{N="RAM_Used_%";E={[math]::Round((1-($_.FreePhysicalMemory/$_.TotalVisibleMemorySize))*100,1)}}|Format-List;P}
+   "10"{Get-CimInstance Win32_Processor|Select Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed|Format-List;P}
+   "11"{Get-CimInstance Win32_PhysicalMemory|Select Manufacturer,Capacity,Speed,PartNumber|Format-Table -AutoSize;P}
+   "12"{powercfg /setactive SCHEME_BALANCED|Out-Null;Write-Host "✓ Balanced" -f Green;P}
+   "13"{powercfg /setactive SCHEME_MIN|Out-Null;Write-Host "✓ High Performance" -f Green;P}
+   "14"{powercfg /getactivescheme;P}
+   "15"{powercfg /setactive SCHEME_MIN|Out-Null;Write-Host "✓ High Performance Power applied" -f Green;P}
+  }
  }
 }
 function WindowsMenu{
  while($true){
-  Header "🪟 WINDOWS GAMING"
-  Write-Host "[1] GameDVR OFF";Write-Host "[2] GameConfigStore OFF";Write-Host "[3] Game Mode Status";Write-Host "[4] Balanced Power";Write-Host "[5] High Performance Power";Write-Host "[6] Multimedia Scheduler";Write-Host "[7] Background Apps Status";Write-Host "[8] Startup Apps";Write-Host "[9] Windows Version";Write-Host "[10] Build";Write-Host "[11] Uptime";Write-Host "[12] Active Power Plan";Write-Host "[13] GPU Scheduler Status";Write-Host "[14] Windows Gaming Pack";Write-Host "[15] APPLY ALL"
-  Write-Host ""; Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow;$x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
+  Header "🪟 WINDOWS"
+  Write-Host "[1] Game Mode Status";Write-Host "[2] GameDVR Status";Write-Host "[3] GameConfigStore Status";Write-Host "[4] Windows Version";Write-Host "[5] Windows Build";Write-Host "[6] Uptime";Write-Host "[7] Startup Apps";Write-Host "[8] Running Services";Write-Host "[9] Active Power Plan";Write-Host "[10] Hardware GPU Scheduler";Write-Host "[11] Windows Update Status";Write-Host "[12] Background App Status";Write-Host "[13] Windows Gaming Settings";Write-Host "[14] Open Gaming Settings";Write-Host "[15] APPLY WINDOWS SAFE"
+  Write-Host "";Write-Host "[B] ⬅ BACK    [0] ❌ EXIT" -ForegroundColor Yellow
+  $x=(Read-Host "เลือก").ToUpper();if($x-eq"B"){return};if($x-eq"0"){exit}
   switch($x){
-   "1"{FiveMMenu}
-   "2"{FiveMMenu}
-   "3"{Get-ItemProperty "HKCU:\Software\Microsoft\GameBar" -ErrorAction SilentlyContinue|Format-List;P}
-   "4"{powercfg /setactive SCHEME_BALANCED|Out-Null}
-   "5"{powercfg /setactive SCHEME_MIN|Out-Null}
-   "6"{Profile "HIGH"}
-   "7"{Get-Service|Where Status -eq Running|Measure-Object|Select Count|Format-List;P}
-   "8"{Get-CimInstance Win32_StartupCommand|Select Name,Command|Format-Table -AutoSize;P}
-   "9"{Get-CimInstance Win32_OperatingSystem|Select Caption,Version|Format-List;P}
-   "10"{[Environment]::OSVersion.Version|Write-Host;P}
-   "11"{(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;P}
-   "12"{powercfg /getactivescheme;P}
-   "13"{Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" -ErrorAction SilentlyContinue|Select HwSchMode|Format-List;P}
-   "14"{Profile "HIGH"}
-   "15"{Profile "MAX"}
-  };Write-Host "`n✓ DONE" -f Green;P
+   "1"{Get-ItemProperty "HKCU:\Software\Microsoft\GameBar" -ErrorAction SilentlyContinue|Select AutoGameModeEnabled|Format-List;P}
+   "2"{Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" -ErrorAction SilentlyContinue|Select AppCaptureEnabled|Format-List;P}
+   "3"{Get-ItemProperty "HKCU:\System\GameConfigStore" -ErrorAction SilentlyContinue|Select GameDVR_Enabled|Format-List;P}
+   "4"{Get-CimInstance Win32_OperatingSystem|Select Caption,Version|Format-List;P}
+   "5"{[Environment]::OSVersion.Version|Write-Host;P}
+   "6"{(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;P}
+   "7"{Get-CimInstance Win32_StartupCommand|Select Name,Command|Format-Table -AutoSize;P}
+   "8"{Get-Service|Where Status -eq Running|Measure-Object|Select Count|Format-List;P}
+   "9"{powercfg /getactivescheme;P}
+   "10"{Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" -ErrorAction SilentlyContinue|Select HwSchMode|Format-List;P}
+   "11"{Get-Service wuauserv|Select Status,StartType|Format-List;P}
+   "12"{Get-Service|Where Status -eq Running|Measure-Object|Select Count|Format-List;P}
+   "13"{Get-ItemProperty "HKCU:\Software\Microsoft\GameBar" -ErrorAction SilentlyContinue|Format-List;P}
+   "14"{Start-Process "ms-settings:gaming";P}
+   "15"{Profile "MEDIUM"}
+  }
  }
 }
 function CustomMenu{
@@ -223,11 +257,19 @@ function CustomMenu{
 
 function Restore{
  Header "♻ RESTORE"
- if(Test-Path "$bak\game.reg"){reg.exe import "$bak\game.reg"|Out-Null}
- if(Test-Path "$bak\config.reg"){reg.exe import "$bak\config.reg"|Out-Null}
- if(Test-Path "$bak\mouse.reg"){reg.exe import "$bak\mouse.reg"|Out-Null}
+ $latest=Get-ChildItem $bak -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending|Select-Object -First 1
+ if(!$latest){
+  Write-Host "`n! ยังไม่มี Backup" -ForegroundColor Yellow
+  WaitBack
+  return
+ }
+ foreach($name in @("GameDVR","GameConfigStore","Mouse","Multimedia","Psched")){
+  $f=Join-Path $latest.FullName "$name.reg"
+  if(Test-Path $f){reg.exe import $f 2>$null|Out-Null}
+ }
  powercfg /setactive SCHEME_BALANCED|Out-Null
- Write-Host "`n✓ RESTORE COMPLETE" -ForegroundColor Yellow
+ Write-Host "`n✓ RESTORE COMPLETE" -ForegroundColor Green
+ Write-Host "Backup: $($latest.FullName)" -ForegroundColor DarkGray
  WaitBack
 }
 
@@ -256,7 +298,14 @@ while($true){
  switch($m){
   "1"{Profile "LOW"};"2"{Profile "MEDIUM"};"3"{Profile "HIGH"};"4"{Profile "MAX"}
   "5"{FiveMMenu};"6"{NetworkMenu};"7"{MouseMenu};"8"{CpuRamMenu};"9"{WindowsMenu};"C"{CustomMenu};"R"{Restore}
-  "S"{Header "📊 STATUS";Write-Host "✓ Engine : READY" -f Green;Write-Host "✓ Backup : $bak";WaitBack}
+  "S"{
+    Header "📊 STATUS"
+    $latest=Get-ChildItem $bak -Directory -ErrorAction SilentlyContinue|Sort-Object Name -Descending|Select-Object -First 1
+    Write-Host "✓ Engine : READY" -ForegroundColor Green
+    Write-Host "✓ Backup Folder : $bak"
+    if($latest){Write-Host "✓ Latest Backup : $($latest.Name)" -ForegroundColor Green}else{Write-Host "! Backup : NONE" -ForegroundColor Yellow}
+    WaitBack
+  }
   "0"{exit}
  }
 }
