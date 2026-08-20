@@ -1,31 +1,430 @@
-# LARZONE DEBLOAT - FiveM Edition
-# Right click -> Run with PowerShell (Administrator)
-$ErrorActionPreference='SilentlyContinue'
+#requires -version 5.1
+# LARZONE // DEBLOAT v3 - FiveM Edition
+# Run this file as Administrator.
+
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-[Windows.Forms.Application]::EnableVisualStyles()
-$Root="$env:ProgramData\LarzoneDebloat";$Backup="$Root\Backups";$StateFile="$Root\state.json";$Log="$Root\larzone.log"
-New-Item -ItemType Directory -Force -Path $Root,$Backup|Out-Null
-function Admin{$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent());$p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)}
-if(!(Admin)){[Windows.Forms.MessageBox]::Show('กรุณาเปิด PowerShell แบบ Administrator แล้วรันไฟล์นี้อีกครั้ง','LARZONE');exit}
-function LoadState{if(Test-Path $StateFile){try{return Get-Content $StateFile -Raw|ConvertFrom-Json}catch{}};[pscustomobject]@{Normal=$false;High=$false;Custom=$false;Gpedit=$false;Ram='ยังไม่ได้ตั้ง';LastMode='ยังไม่เคยรัน';LastRun='';LastBackup=''}}
-$script:S=LoadState
-function SaveState{$script:S|ConvertTo-Json|Set-Content $StateFile -Encoding UTF8}
-function Log($x){$l="[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $x";Add-Content $Log $l -Encoding UTF8;if($script:LogBox){$script:LogBox.AppendText($l+"`r`n")}}
-function DoBackup{$d=Join-Path $Backup (Get-Date -Format 'yyyyMMdd_HHmmss');New-Item -ItemType Directory -Force $d|Out-Null;foreach($k in @('HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile','HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl','HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters','HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters')){reg export $k (Join-Path $d (($k-replace '[\\/:*?"<>|]','_')+'.reg')) /y|Out-Null};$script:S.LastBackup=$d;SaveState;Log "Backup created: $d";return $d}
-function App($n){$p=@(Get-AppxPackage -AllUsers -Name $n);if($p){$p|%{Remove-AppxPackage -Package $_.PackageFullName -AllUsers;Log "Removed $n"}}else{Log "Absent $n"}}
-function Svc($n){$s=Get-Service $n;if($s){$m=(Get-CimInstance Win32_Service -Filter "Name='$n'").StartMode;if($m-ne'Disabled'){Set-Service $n -StartupType Disabled;Log "Disabled $n"}}}
-function Normal{$b=DoBackup;@('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub')|%{App $_};Svc 'MapsBroker';$script:S.Normal=$true;$script:S.High=$false;$script:S.LastMode='NORMAL';$script:S.LastRun=(Get-Date).ToString('s');SaveState;[Windows.Forms.MessageBox]::Show("NORMAL เสร็จแล้ว`nBackup: $b",'LARZONE');Refresh}
-function High{$b=DoBackup;@('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.MicrosoftSolitaireCollection','Microsoft.YourPhone')|%{App $_};Svc 'MapsBroker';Svc 'DiagTrack';$script:S.Normal=$false;$script:S.High=$true;$script:S.LastMode='HIGH';$script:S.LastRun=(Get-Date).ToString('s');SaveState;[Windows.Forms.MessageBox]::Show("HIGH เสร็จแล้ว`nBackup: $b",'LARZONE');Refresh}
-function StatusText{$a=@('LARZONE STATUS','==============================',"NORMAL : $(if($S.Normal){'RAN'}else{'NOT RAN'})","HIGH   : $(if($S.High){'RAN'}else{'NOT RAN'})","CUSTOM : $(if($S.Custom){'RAN'}else{'NOT RAN'})","GPEDIT : $(if($S.Gpedit){'USED'}else{'NOT USED'})","RAM    : $($S.Ram)",'','CURRENT WINDOWS STATE','==============================');foreach($n in @('MapsBroker','DiagTrack')){$s=Get-Service $n;if($s){$a+="$n : $($s.Status) / $((Get-CimInstance Win32_Service -Filter "Name='$n'").StartMode)"}};foreach($n in @('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.MicrosoftSolitaireCollection','Microsoft.YourPhone')){$a+="$n : $(if(@(Get-AppxPackage -AllUsers -Name $n).Count){'PRESENT'}else{'REMOVED / ABSENT'})"};$a+="`nLAST MODE: $($S.LastMode)";$a+="LAST RUN : $($S.LastRun)";$a+="BACKUP   : $($S.LastBackup)";$a-join "`r`n"}
-function ShowStatus{$f=New-Object Windows.Forms.Form;$f.Text='LARZONE - CHECK STATUS';$f.Size=New-Object Drawing.Size(820,610);$f.StartPosition='CenterScreen';$f.BackColor=[Drawing.Color]::FromArgb(10,13,19);$b=New-Object Windows.Forms.TextBox;$b.Multiline=$true;$b.ReadOnly=$true;$b.ScrollBars='Both';$b.WordWrap=$false;$b.Font=New-Object Drawing.Font('Consolas',10);$b.BackColor=[Drawing.Color]::FromArgb(20,23,31);$b.ForeColor='White';$b.Location=New-Object Drawing.Point(25,25);$b.Size=New-Object Drawing.Size(750,450);$b.Text=StatusText;$f.Controls.Add($b);$r=New-Object Windows.Forms.Button;$r.Text='REFRESH';$r.Location=New-Object Drawing.Point(25,500);$r.Size=New-Object Drawing.Size(170,45);$r.Add_Click({$script:S=LoadState;$b.Text=StatusText;Refresh});$f.Controls.Add($r);$x=New-Object Windows.Forms.Button;$x.Text='BACK';$x.Location=New-Object Drawing.Point(215,500);$x.Size=New-Object Drawing.Size(170,45);$x.Add_Click({$f.Close()});$f.Controls.Add($x);[void]$f.ShowDialog()}
-function Custom{$f=New-Object Windows.Forms.Form;$f.Text='LARZONE - CUSTOM';$f.Size=New-Object Drawing.Size(650,450);$f.StartPosition='CenterScreen';$f.BackColor=[Drawing.Color]::FromArgb(12,15,22);$g=New-Object Windows.Forms.CheckBox;$g.Text='GPEDIT - เปิด Local Group Policy';$g.ForeColor='White';$g.Location=New-Object Drawing.Point(30,60);$g.Size=New-Object Drawing.Size(500,40);$f.Controls.Add($g);$r=New-Object Windows.Forms.CheckBox;$r.Text='RAM PROFILE';$r.ForeColor='White';$r.Location=New-Object Drawing.Point(30,110);$r.Size=New-Object Drawing.Size(500,40);$f.Controls.Add($r);$c=New-Object Windows.Forms.ComboBox;$c.DropDownStyle='DropDownList';$c.Items.AddRange(@('4 GB','6 GB','8 GB','12 GB','16 GB','24 GB','32 GB','64 GB'));$c.SelectedItem='16 GB';$c.Location=New-Object Drawing.Point(55,160);$c.Size=New-Object Drawing.Size(150,30);$f.Controls.Add($c);$a=New-Object Windows.Forms.Button;$a.Text='APPLY CUSTOM';$a.Location=New-Object Drawing.Point(30,230);$a.Size=New-Object Drawing.Size(250,55);$a.Add_Click({if($g.Checked){Start-Process gpedit.msc;$S.Gpedit=$true;Log 'GPEDIT opened'};if($r.Checked){$S.Ram=$c.SelectedItem;Log "RAM profile $($c.SelectedItem)"};$S.Custom=$true;$S.LastMode='CUSTOM';$S.LastRun=(Get-Date).ToString('s');SaveState;$f.Close();Refresh});$f.Controls.Add($a);$x=New-Object Windows.Forms.Button;$x.Text='BACK';$x.Location=New-Object Drawing.Point(300,230);$x.Size=New-Object Drawing.Size(150,55);$x.Add_Click({$f.Close()});$f.Controls.Add($x);[void]$f.ShowDialog()}
-function Restore{$d=$S.LastBackup;if(!$d-or!(Test-Path $d)){[Windows.Forms.MessageBox]::Show('ยังไม่มี Backup ล่าสุด','LARZONE');return};if([Windows.Forms.MessageBox]::Show('Restore Registry จาก Backup ล่าสุด?','LARZONE','YesNo','Warning')-ne'Yes'){return};Get-ChildItem $d -Filter '*.reg'|%{reg import $_.FullName|Out-Null;Log "Restored $($_.Name)"};$S.Normal=$false;$S.High=$false;$S.Custom=$false;$S.LastMode='RESTORED';SaveState;Refresh;[Windows.Forms.MessageBox]::Show('Restore เสร็จแล้ว','LARZONE')}
-$form=New-Object Windows.Forms.Form;$form.Text='LARZONE DEBLOAT - FiveM';$form.Size=New-Object Drawing.Size(1100,700);$form.StartPosition='CenterScreen';$form.BackColor=[Drawing.Color]::FromArgb(8,10,15)
-function Btn($t,$x,$y,$w,$h,$fn){$b=New-Object Windows.Forms.Button;$b.Text=$t;$b.Location=New-Object Drawing.Point($x,$y);$b.Size=New-Object Drawing.Size($w,$h);$b.Font=New-Object Drawing.Font('Segoe UI',12,[Drawing.FontStyle]::Bold);$b.BackColor=[Drawing.Color]::FromArgb(20,24,34);$b.ForeColor='White';$b.FlatStyle='Flat';$b.Add_Click($fn);$form.Controls.Add($b)}
-$h=New-Object Windows.Forms.Label;$h.Text='LARZONE // DEBLOAT';$h.Font=New-Object Drawing.Font('Segoe UI',30,[Drawing.FontStyle]::Bold);$h.ForeColor='White';$h.Location=New-Object Drawing.Point(45,30);$h.AutoSize=$true;$form.Controls.Add($h)
-$script:SL=New-Object Windows.Forms.Label;$script:SL.Font=New-Object Drawing.Font('Segoe UI',11,[Drawing.FontStyle]::Bold);$script:SL.ForeColor=[Drawing.Color]::FromArgb(100,220,150);$script:SL.Location=New-Object Drawing.Point(760,50);$script:SL.AutoSize=$true;$form.Controls.Add($script:SL)
-Btn 'NORMAL' 45 140 315 70 {Normal};Btn 'HIGH' 380 140 315 70 {High};Btn 'CUSTOM' 45 225 650 70 {Custom};Btn 'CHECK STATUS' 45 310 315 60 {ShowStatus};Btn 'BACKUP NOW' 380 310 315 60 {$b=DoBackup;[Windows.Forms.MessageBox]::Show("Backup เสร็จแล้ว`n$b",'LARZONE')};Btn 'RESTORE LAST BACKUP' 45 385 650 60 {Restore};Btn 'EXIT' 45 460 650 55 {$form.Close()}
-$p=New-Object Windows.Forms.Panel;$p.Location=New-Object Drawing.Point(730,125);$p.Size=New-Object Drawing.Size(320,400);$p.BackColor=[Drawing.Color]::FromArgb(16,19,27);$form.Controls.Add($p);$n=New-Object Windows.Forms.Label;$n.Text='SYSTEM NOTES';$n.Font=New-Object Drawing.Font('Segoe UI',15,[Drawing.FontStyle]::Bold);$n.ForeColor='White';$n.Location=New-Object Drawing.Point(20,20);$n.AutoSize=$true;$p.Controls.Add($n);$nt=New-Object Windows.Forms.Label;$nt.Text="NORMAL = ปลอดภัยกว่า`nHIGH = Debloat เพิ่มขึ้น`nCUSTOM = GPEDIT + RAM profile`nCHECK STATUS = ตรวจสถานะจริง`n`nไม่แตะ BCD / CPU / Maximum Memory`nไม่ปิด Defender / Windows Update`nNetwork / Keyboard / Mouse แยกออก";$nt.ForeColor=[Drawing.Color]::FromArgb(185,190,205);$nt.Location=New-Object Drawing.Point(20,65);$nt.Size=New-Object Drawing.Size(275,250);$p.Controls.Add($nt)
-$script:LogBox=New-Object Windows.Forms.TextBox;$script:LogBox.Multiline=$true;$script:LogBox.ReadOnly=$true;$script:LogBox.ScrollBars='Vertical';$script:LogBox.Font=New-Object Drawing.Font('Consolas',8);$script:LogBox.BackColor=[Drawing.Color]::FromArgb(9,11,16);$script:LogBox.ForeColor=[Drawing.Color]::FromArgb(180,200,220);$script:LogBox.Location=New-Object Drawing.Point(730,555);$script:LogBox.Size=New-Object Drawing.Size(320,90);$form.Controls.Add($script:LogBox)
-function Refresh{$script:SL.Text='STATUS • '+$S.LastMode};Refresh;Log 'UI started';[void]$form.ShowDialog()
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$Root      = Join-Path $env:ProgramData 'LarzoneDebloat'
+$BackupDir = Join-Path $Root 'Backups'
+$StateFile = Join-Path $Root 'state.json'
+$LogFile   = Join-Path $Root 'larzone.log'
+New-Item -ItemType Directory -Force -Path $Root,$BackupDir | Out-Null
+
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $p  = New-Object Security.Principal.WindowsPrincipal($id)
+    return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-Admin)) {
+    [Windows.Forms.MessageBox]::Show('กรุณาเปิดไฟล์ด้วย Run with PowerShell / PowerShell (Administrator) แล้วลองใหม่','LARZONE v3','OK','Warning') | Out-Null
+    exit
+}
+
+function Default-State {
+    return [pscustomobject]@{
+        Normal       = $false
+        High         = $false
+        Custom       = $false
+        GpeditOpened = $false
+        Ram          = 'ยังไม่ได้ตั้ง'
+        Win32        = 'ยังไม่ได้ตั้ง'
+        Keyboard     = 'ยังไม่ได้ตั้ง'
+        Mouse        = 'ยังไม่ได้ตั้ง'
+        LastMode     = 'ยังไม่เคยรัน'
+        LastRun      = ''
+        LastBackup   = ''
+    }
+}
+
+function Load-State {
+    if (Test-Path $StateFile) {
+        try {
+            $x = Get-Content $StateFile -Raw | ConvertFrom-Json
+            $d = Default-State
+            foreach ($p in $d.PSObject.Properties.Name) {
+                if ($null -ne $x.PSObject.Properties[$p]) { $d.$p = $x.$p }
+            }
+            return $d
+        } catch {}
+    }
+    return Default-State
+}
+
+$script:S = Load-State
+
+function Save-State {
+    $script:S | ConvertTo-Json -Depth 4 | Set-Content -Path $StateFile -Encoding UTF8
+}
+
+function Log([string]$Text) {
+    $line = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Text"
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    if ($script:LogBox) { $script:LogBox.AppendText($line + [Environment]::NewLine) }
+}
+
+function Reg-Path([string]$Path) {
+    return "Registry::$Path"
+}
+
+function Get-Dword([string]$Path,[string]$Name) {
+    try {
+        $p = Get-ItemProperty -Path (Reg-Path $Path) -Name $Name -ErrorAction Stop
+        return [uint32]$p.$Name
+    } catch { return $null }
+}
+
+function Set-Dword([string]$Path,[string]$Name,[uint32]$Value) {
+    $rp = Reg-Path $Path
+    if (-not (Test-Path $rp)) { New-Item -Path $rp -Force | Out-Null }
+    New-ItemProperty -Path $rp -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
+}
+
+function Backup-RegistryKey([string]$Key,[string]$Folder) {
+    $safe = ($Key -replace '[\\/:*?"<>|]','_') + '.reg'
+    $dest = Join-Path $Folder $safe
+    & reg.exe export $Key $dest /y *> $null
+    if ($LASTEXITCODE -ne 0) { Log "Backup skipped/failed: $Key" }
+}
+
+function Do-Backup {
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $folder = Join-Path $BackupDir $stamp
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+
+    $keys = @(
+        'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile',
+        'HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl',
+        'HKLM\SYSTEM\CurrentControlSet\Control',
+        'HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters',
+        'HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters'
+    )
+    foreach ($k in $keys) { Backup-RegistryKey $k $folder }
+
+    $services = @('MapsBroker','DiagTrack')
+    $svcData = foreach ($name in $services) {
+        try {
+            $svc = Get-CimInstance Win32_Service -Filter "Name='$name'"
+            if ($svc) { [pscustomobject]@{Name=$name;StartMode=$svc.StartMode;State=$svc.State} }
+        } catch {}
+    }
+    $svcData | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $folder 'services.json') -Encoding UTF8
+
+    $script:S.LastBackup = $folder
+    Save-State
+    Log "Backup created: $folder"
+    return $folder
+}
+
+function Set-ServiceDisabled([string]$Name) {
+    try {
+        $svc = Get-Service -Name $Name -ErrorAction Stop
+        if ($svc.StartType -ne 'Disabled') {
+            Set-Service -Name $Name -StartupType Disabled -ErrorAction Stop
+            Log "Disabled service: $Name"
+        }
+    } catch { Log "Service not changed: $Name" }
+}
+
+function Restore-Services([string]$Folder) {
+    $file = Join-Path $Folder 'services.json'
+    if (-not (Test-Path $file)) { return }
+    try {
+        $data = Get-Content $file -Raw | ConvertFrom-Json
+        foreach ($s in @($data)) {
+            if ($s.StartMode -eq 'Auto') { Set-Service $s.Name -StartupType Automatic -ErrorAction SilentlyContinue }
+            elseif ($s.StartMode -eq 'Manual') { Set-Service $s.Name -StartupType Manual -ErrorAction SilentlyContinue }
+            elseif ($s.StartMode -eq 'Disabled') { Set-Service $s.Name -StartupType Disabled -ErrorAction SilentlyContinue }
+            Log "Restored service startup: $($s.Name) -> $($s.StartMode)"
+        }
+    } catch { Log 'Service restore could not be completed.' }
+}
+
+function Remove-AppxIfPresent([string]$Name) {
+    try {
+        $packages = @(Get-AppxPackage -AllUsers -Name $Name -ErrorAction SilentlyContinue)
+        if ($packages.Count -eq 0) { Log "Absent: $Name"; return }
+        foreach ($p in $packages) {
+            Remove-AppxPackage -Package $p.PackageFullName -AllUsers -ErrorAction Stop
+            Log "Removed AppX: $Name"
+        }
+    } catch { Log "AppX removal failed/blocked: $Name" }
+}
+
+function Normal {
+    $b = Do-Backup
+    foreach ($n in @('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub')) { Remove-AppxIfPresent $n }
+    Set-ServiceDisabled 'MapsBroker'
+    $script:S.Normal = $true; $script:S.High = $false
+    $script:S.LastMode = 'NORMAL'; $script:S.LastRun = (Get-Date).ToString('s')
+    Save-State; Log 'NORMAL completed.'; Refresh-Main
+    [Windows.Forms.MessageBox]::Show("NORMAL เสร็จแล้ว`nBackup: $b`n`nหมายเหตุ: AppX ที่ถูกถอนอาจไม่สามารถ Restore กลับด้วย Registry backup ได้",'LARZONE v3','OK','Information') | Out-Null
+}
+
+function High {
+    $b = Do-Backup
+    foreach ($n in @('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.MicrosoftSolitaireCollection','Microsoft.YourPhone')) { Remove-AppxIfPresent $n }
+    Set-ServiceDisabled 'MapsBroker'; Set-ServiceDisabled 'DiagTrack'
+    $script:S.Normal = $false; $script:S.High = $true
+    $script:S.LastMode = 'HIGH'; $script:S.LastRun = (Get-Date).ToString('s')
+    Save-State; Log 'HIGH completed.'; Refresh-Main
+    [Windows.Forms.MessageBox]::Show("HIGH เสร็จแล้ว`nBackup: $b`n`nหมายเหตุ: AppX ที่ถูกถอนอาจไม่สามารถ Restore กลับด้วย Registry backup ได้",'LARZONE v3','OK','Information') | Out-Null
+}
+
+# CUSTOM values explicitly supplied in the previous configuration.
+$RamMap = [ordered]@{
+    '4 GB'  = 0x400000
+    '6 GB'  = 0x600000
+    '8 GB'  = 0x800000
+    '12 GB' = 0xC00000
+    '16 GB' = 0x1000000
+    '24 GB' = 0x1800000
+    '32 GB' = 0x2000000
+    '64 GB' = 0x4000000
+}
+
+function Apply-CustomValues([string]$RamChoice,[bool]$ApplyRam,[bool]$ApplyWin32,[bool]$ApplyKeyboard,[bool]$ApplyMouse) {
+    $b = Do-Backup
+    $changed = New-Object System.Collections.Generic.List[string]
+
+    if ($ApplyRam) {
+        $v = [uint32]$RamMap[$RamChoice]
+        Set-Dword 'HKLM\SYSTEM\CurrentControlSet\Control' 'SvcHostSplitThresholdInKB' $v
+        $script:S.Ram = "$RamChoice -> 0x$('{0:X}' -f $v)"
+        $changed.Add("RAM profile: $RamChoice / SvcHostSplitThresholdInKB = 0x$('{0:X}' -f $v)")
+    }
+
+    if ($ApplyWin32) {
+        # User-specified value: fff9887 (stored as DWORD hexadecimal).
+        $v = [uint32]0x0FFF9887
+        Set-Dword 'HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl' 'Win32PrioritySeparation' $v
+        $script:S.Win32 = '0x0FFF9887'
+        $changed.Add('Win32PrioritySeparation = 0x0FFF9887')
+    }
+
+    if ($ApplyKeyboard) {
+        Set-Dword 'HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters' 'KeyboardDataQueueSize' 16
+        $script:S.Keyboard = '16 decimal'
+        $changed.Add('KeyboardDataQueueSize = 16 decimal')
+    }
+
+    if ($ApplyMouse) {
+        Set-Dword 'HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters' 'MouseDataQueueSize' 25
+        $script:S.Mouse = '25 decimal'
+        $changed.Add('MouseDataQueueSize = 25 decimal')
+    }
+
+    if ($changed.Count -eq 0) {
+        [Windows.Forms.MessageBox]::Show('ยังไม่ได้เลือกค่าที่ต้องการ Apply','LARZONE v3','OK','Warning') | Out-Null
+        return
+    }
+
+    $script:S.Custom = $true; $script:S.LastMode = 'CUSTOM'; $script:S.LastRun = (Get-Date).ToString('s')
+    Save-State
+    foreach ($x in $changed) { Log $x }
+    Refresh-Main
+    [Windows.Forms.MessageBox]::Show(("CUSTOM เสร็จแล้ว`n`n" + ($changed -join "`n") + "`n`nBackup: $b"),'LARZONE v3','OK','Information') | Out-Null
+}
+
+function Open-Gpedit {
+    if (-not (Get-Command gpedit.msc -ErrorAction SilentlyContinue)) {
+        try { Start-Process 'gpedit.msc' -ErrorAction Stop }
+        catch {
+            [Windows.Forms.MessageBox]::Show('เครื่องนี้ไม่พบ gpedit.msc หรือ Windows edition ไม่รองรับ Local Group Policy Editor','LARZONE v3','OK','Warning') | Out-Null
+            Log 'GPEDIT unavailable.'
+            return
+        }
+    } else {
+        Start-Process 'gpedit.msc'
+    }
+    $script:S.GpeditOpened = $true; Save-State; Log 'GPEDIT opened (manual policy configuration).'
+}
+
+function Get-SystemInfo {
+    try { $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name).Trim() } catch { $cpu='ไม่ทราบ' }
+    try { $gpu = ((Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join ' / ').Trim() } catch { $gpu='ไม่ทราบ' }
+    try {
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        $win = "$($cv.ProductName) $($cv.DisplayVersion) (Build $($cv.CurrentBuild))"
+    } catch { $win='ไม่ทราบ' }
+    try { $ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1) } catch { $ram='ไม่ทราบ' }
+    [pscustomobject]@{CPU=$cpu;GPU=$gpu;Windows=$win;RAM="$ram GB"}
+}
+
+function Check-Row([string]$Name,[bool]$OK,[string]$Detail) {
+    $mark = if ($OK) { 'OK' } else { 'NOT OK' }
+    return ("{0,-24} [{1,-6}] {2}" -f $Name,$mark,$Detail)
+}
+
+function StatusText {
+    $a = New-Object System.Collections.Generic.List[string]
+    $sys = Get-SystemInfo
+    $a.Add('LARZONE // CHECK STATUS v3')
+    $a.Add('==============================================')
+    $a.Add(("CPU    : {0}" -f $sys.CPU))
+    $a.Add(("GPU    : {0}" -f $sys.GPU))
+    $a.Add(("WINDOWS: {0}" -f $sys.Windows))
+    $a.Add(("RAM    : {0}" -f $sys.RAM))
+    $a.Add('')
+    $a.Add('PROFILE STATE')
+    $a.Add('----------------------------------------------')
+    $a.Add((Check-Row 'NORMAL' $S.Normal $(if($S.Normal){'state says applied'}else{'not selected'})))
+    $a.Add((Check-Row 'HIGH' $S.High $(if($S.High){'state says applied'}else{'not selected'})))
+    $a.Add((Check-Row 'CUSTOM' $S.Custom $(if($S.Custom){'state says applied'}else{'not selected'})))
+    $a.Add((Check-Row 'GPEDIT' $S.GpeditOpened $(if($S.GpeditOpened){'opened manually'}else{'not opened by tool'})))
+    $a.Add('')
+    $a.Add('CUSTOM REGISTRY - REAL VALUES')
+    $a.Add('----------------------------------------------')
+
+    $w = Get-Dword 'HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl' 'Win32PrioritySeparation'
+    $a.Add((Check-Row 'Win32PrioritySeparation' ($null -ne $w -and $w -eq [uint32]0x0FFF9887) $(if($null -eq $w){'missing'}else{'current = 0x{0:X}' -f $w})))
+
+    $split = Get-Dword 'HKLM\SYSTEM\CurrentControlSet\Control' 'SvcHostSplitThresholdInKB'
+    $ramKnown = $false; $ramName='not set'
+    foreach ($pair in $RamMap.GetEnumerator()) { if ($null -ne $split -and $split -eq [uint32]$pair.Value) { $ramKnown=$true; $ramName=$pair.Key } }
+    $a.Add((Check-Row 'RAM / SvcHostSplit' $ramKnown $(if($null -eq $split){'missing'}else{'current = 0x{0:X} ({1})' -f $split,$ramName})))
+
+    $kb = Get-Dword 'HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters' 'KeyboardDataQueueSize'
+    $a.Add((Check-Row 'KeyboardDataQueueSize' ($null -ne $kb -and $kb -eq 16) $(if($null -eq $kb){'missing'}else{'current = {0} decimal' -f $kb})))
+
+    $mouse = Get-Dword 'HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters' 'MouseDataQueueSize'
+    $a.Add((Check-Row 'MouseDataQueueSize' ($null -ne $mouse -and $mouse -eq 25) $(if($null -eq $mouse){'missing'}else{'current = {0} decimal' -f $mouse})))
+
+    $a.Add('')
+    $a.Add('SERVICES')
+    $a.Add('----------------------------------------------')
+    foreach ($n in @('MapsBroker','DiagTrack')) {
+        try {
+            $s=Get-Service $n -ErrorAction Stop
+            $c=Get-CimInstance Win32_Service -Filter "Name='$n'"
+            $a.Add(("{0,-24} {1,-10} StartMode={2}" -f $n,$s.Status,$c.StartMode))
+        } catch { $a.Add(("{0,-24} NOT FOUND" -f $n)) }
+    }
+
+    $a.Add('')
+    $a.Add('APPX CHECK')
+    $a.Add('----------------------------------------------')
+    foreach ($n in @('Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.People','Microsoft.WindowsFeedbackHub','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.MicrosoftSolitaireCollection','Microsoft.YourPhone')) {
+        try { $count=@(Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue).Count; $state=if($count){'PRESENT'}else{'REMOVED / ABSENT'}; $a.Add(("{0,-38} {1}" -f $n,$state)) }
+        catch { $a.Add(("{0,-38} CHECK FAILED" -f $n)) }
+    }
+
+    $a.Add('')
+    $a.Add('LAST ACTION')
+    $a.Add('----------------------------------------------')
+    $a.Add("Mode   : $($S.LastMode)")
+    $a.Add("Run    : $($S.LastRun)")
+    $a.Add("Backup : $($S.LastBackup)")
+    $a.Add('')
+    $a.Add('Note: GPEDIT is opened manually; this tool does not claim a policy was applied unless it changes a Registry value itself.')
+    return ($a -join [Environment]::NewLine)
+}
+
+function Show-Status {
+    $f=New-Object Windows.Forms.Form
+    $f.Text='LARZONE // CHECK STATUS'
+    $f.Size=New-Object Drawing.Size(920,700)
+    $f.StartPosition='CenterScreen'
+    $f.BackColor=[Drawing.Color]::FromArgb(9,12,18)
+    $b=New-Object Windows.Forms.TextBox
+    $b.Multiline=$true; $b.ReadOnly=$true; $b.ScrollBars='Both'; $b.WordWrap=$false
+    $b.Font=New-Object Drawing.Font('Consolas',10)
+    $b.BackColor=[Drawing.Color]::FromArgb(17,21,30); $b.ForeColor=[Drawing.Color]::FromArgb(235,238,245)
+    $b.Location=New-Object Drawing.Point(20,20); $b.Size=New-Object Drawing.Size(860,570); $b.Text=StatusText
+    $f.Controls.Add($b)
+    $r=New-Object Windows.Forms.Button; $r.Text='REFRESH'; $r.Location=New-Object Drawing.Point(20,610); $r.Size=New-Object Drawing.Size(180,45)
+    $r.Add_Click({ $script:S=Load-State; $b.Text=StatusText }); $f.Controls.Add($r)
+    $x=New-Object Windows.Forms.Button; $x.Text='BACK'; $x.Location=New-Object Drawing.Point(215,610); $x.Size=New-Object Drawing.Size(180,45)
+    $x.Add_Click({$f.Close()}); $f.Controls.Add($x)
+    [void]$f.ShowDialog()
+}
+
+function Custom {
+    $f=New-Object Windows.Forms.Form
+    $f.Text='LARZONE // CUSTOM'
+    $f.Size=New-Object Drawing.Size(760,570)
+    $f.StartPosition='CenterScreen'
+    $f.BackColor=[Drawing.Color]::FromArgb(10,13,20)
+
+    $title=New-Object Windows.Forms.Label; $title.Text='CUSTOM // ADVANCED'; $title.Font=New-Object Drawing.Font('Segoe UI',22,[Drawing.FontStyle]::Bold); $title.ForeColor='White'; $title.Location=New-Object Drawing.Point(30,25); $title.AutoSize=$true; $f.Controls.Add($title)
+
+    $gp=New-Object Windows.Forms.Button; $gp.Text='OPEN GPEDIT'; $gp.Location=New-Object Drawing.Point(30,80); $gp.Size=New-Object Drawing.Size(210,50); $gp.Add_Click({Open-Gpedit}); $f.Controls.Add($gp)
+    $note=New-Object Windows.Forms.Label; $note.Text='GPEDIT = เปิดตัว Local Group Policy Editor เท่านั้น`n(ยังไม่อ้างว่า Policy ถูก Apply อัตโนมัติ)'; $note.ForeColor=[Drawing.Color]::FromArgb(180,190,205); $note.Location=New-Object Drawing.Point(255,80); $note.Size=New-Object Drawing.Size(450,55); $f.Controls.Add($note)
+
+    $ramCheck=New-Object Windows.Forms.CheckBox; $ramCheck.Text='RAM PROFILE'; $ramCheck.ForeColor='White'; $ramCheck.Location=New-Object Drawing.Point(30,160); $ramCheck.Size=New-Object Drawing.Size(180,35); $f.Controls.Add($ramCheck)
+    $combo=New-Object Windows.Forms.ComboBox; $combo.DropDownStyle='DropDownList'; [void]$combo.Items.AddRange(@('4 GB','6 GB','8 GB','12 GB','16 GB','24 GB','32 GB','64 GB')); $combo.SelectedItem='16 GB'; $combo.Location=New-Object Drawing.Point(220,160); $combo.Size=New-Object Drawing.Size(160,30); $f.Controls.Add($combo)
+    $ramInfo=New-Object Windows.Forms.Label; $ramInfo.Text='SvcHostSplitThresholdInKB'; $ramInfo.ForeColor=[Drawing.Color]::FromArgb(170,180,195); $ramInfo.Location=New-Object Drawing.Point(400,160); $ramInfo.AutoSize=$true; $f.Controls.Add($ramInfo)
+
+    $wCheck=New-Object Windows.Forms.CheckBox; $wCheck.Text='WIN32 = 0x0FFF9887'; $wCheck.ForeColor='White'; $wCheck.Location=New-Object Drawing.Point(30,220); $wCheck.Size=New-Object Drawing.Size(300,35); $f.Controls.Add($wCheck)
+    $kCheck=New-Object Windows.Forms.CheckBox; $kCheck.Text='KEYBOARD = 16'; $kCheck.ForeColor='White'; $kCheck.Location=New-Object Drawing.Point(30,270); $kCheck.Size=New-Object Drawing.Size(300,35); $f.Controls.Add($kCheck)
+    $mCheck=New-Object Windows.Forms.CheckBox; $mCheck.Text='MOUSE = 25'; $mCheck.ForeColor='White'; $mCheck.Location=New-Object Drawing.Point(30,320); $mCheck.Size=New-Object Drawing.Size(300,35); $f.Controls.Add($mCheck)
+
+    $apply=New-Object Windows.Forms.Button; $apply.Text='APPLY SELECTED'; $apply.Location=New-Object Drawing.Point(30,390); $apply.Size=New-Object Drawing.Size(250,60); $apply.Add_Click({ Apply-CustomValues $combo.SelectedItem $ramCheck.Checked $wCheck.Checked $kCheck.Checked $mCheck.Checked; $f.Close() }); $f.Controls.Add($apply)
+    $back=New-Object Windows.Forms.Button; $back.Text='BACK'; $back.Location=New-Object Drawing.Point(300,390); $back.Size=New-Object Drawing.Size(160,60); $back.Add_Click({$f.Close()}); $f.Controls.Add($back)
+
+    $info=New-Object Windows.Forms.Label; $info.Text='CUSTOM ไม่มีค่า Debloat ของ NORMAL/HIGH ซ้ำ`n• RAM = SvcHostSplitThresholdInKB`n• Win32 = Win32PrioritySeparation`n• Keyboard/Mouse = DataQueueSize`n• ทุก Apply สร้าง Backup ก่อน'; $info.ForeColor=[Drawing.Color]::FromArgb(175,185,200); $info.Location=New-Object Drawing.Point(30,465); $info.Size=New-Object Drawing.Size(650,70); $f.Controls.Add($info)
+    [void]$f.ShowDialog()
+}
+
+function Restore-LastBackup {
+    $d=$S.LastBackup
+    if (-not $d -or -not (Test-Path $d)) { [Windows.Forms.MessageBox]::Show('ยังไม่มี Backup ล่าสุด','LARZONE v3','OK','Warning') | Out-Null; return }
+    $answer=[Windows.Forms.MessageBox]::Show("Restore Registry จาก Backup นี้?`n`n$d`n`nคำเตือน: Registry/Service จะคืนได้ แต่ AppX ที่ถอนออกอาจไม่ถูกติดตั้งกลับอัตโนมัติ",'LARZONE v3','YesNo','Warning')
+    if ($answer -ne 'Yes') { return }
+    foreach ($reg in @(Get-ChildItem $d -Filter '*.reg' -ErrorAction SilentlyContinue)) {
+        & reg.exe import $reg.FullName *> $null
+        Log "Restored registry: $($reg.Name)"
+    }
+    Restore-Services $d
+    $script:S.Normal=$false; $script:S.High=$false; $script:S.Custom=$false; $script:S.LastMode='RESTORED'; $script:S.LastRun=(Get-Date).ToString('s'); Save-State; Refresh-Main
+    [Windows.Forms.MessageBox]::Show('Restore Registry/Service เสร็จแล้ว`nแนะนำให้ Restart Windows','LARZONE v3','OK','Information') | Out-Null
+}
+
+$form=New-Object Windows.Forms.Form
+$form.Text='LARZONE // DEBLOAT v3 - FiveM'
+$form.Size=New-Object Drawing.Size(1160,760)
+$form.StartPosition='CenterScreen'
+$form.BackColor=[Drawing.Color]::FromArgb(7,10,16)
+
+function Add-Button([string]$Text,[int]$X,[int]$Y,[int]$W,[int]$H,[scriptblock]$Action) {
+    $b=New-Object Windows.Forms.Button
+    $b.Text=$Text; $b.Location=New-Object Drawing.Point($X,$Y); $b.Size=New-Object Drawing.Size($W,$H)
+    $b.Font=New-Object Drawing.Font('Segoe UI',12,[Drawing.FontStyle]::Bold)
+    $b.BackColor=[Drawing.Color]::FromArgb(20,25,35); $b.ForeColor=[Drawing.Color]::White
+    $b.FlatStyle='Flat'; $b.FlatAppearance.BorderSize=1
+    $b.Add_Click($Action); $form.Controls.Add($b)
+}
+
+$head=New-Object Windows.Forms.Label; $head.Text='LARZONE // DEBLOAT'; $head.Font=New-Object Drawing.Font('Segoe UI',30,[Drawing.FontStyle]::Bold); $head.ForeColor='White'; $head.Location=New-Object Drawing.Point(45,30); $head.AutoSize=$true; $form.Controls.Add($head)
+$sub=New-Object Windows.Forms.Label; $sub.Text='FiveM / Windows Utility • v3'; $sub.Font=New-Object Drawing.Font('Segoe UI',10); $sub.ForeColor=[Drawing.Color]::FromArgb(150,160,180); $sub.Location=New-Object Drawing.Point(50,82); $sub.AutoSize=$true; $form.Controls.Add($sub)
+$script:SL=New-Object Windows.Forms.Label; $script:SL.Font=New-Object Drawing.Font('Segoe UI',11,[Drawing.FontStyle]::Bold); $script:SL.ForeColor=[Drawing.Color]::FromArgb(100,230,150); $script:SL.Location=New-Object Drawing.Point(900,45); $script:SL.AutoSize=$true; $form.Controls.Add($script:SL)
+
+Add-Button 'NORMAL' 45 135 315 75 {Normal}
+Add-Button 'HIGH' 380 135 315 75 {High}
+Add-Button 'CUSTOM' 45 225 650 75 {Custom}
+Add-Button 'CHECK STATUS' 45 315 315 65 {Show-Status}
+Add-Button 'BACKUP NOW' 380 315 315 65 { $b=Do-Backup; [Windows.Forms.MessageBox]::Show("Backup เสร็จแล้ว`n$b",'LARZONE v3','OK','Information') | Out-Null }
+Add-Button 'RESTORE LAST BACKUP' 45 395 650 65 {Restore-LastBackup}
+Add-Button 'EXIT' 45 475 650 55 {$form.Close()}
+
+$panel=New-Object Windows.Forms.Panel; $panel.Location=New-Object Drawing.Point(730,120); $panel.Size=New-Object Drawing.Size(380,420); $panel.BackColor=[Drawing.Color]::FromArgb(15,19,28); $form.Controls.Add($panel)
+$pn=New-Object Windows.Forms.Label; $pn.Text='SYSTEM NOTES'; $pn.Font=New-Object Drawing.Font('Segoe UI',16,[Drawing.FontStyle]::Bold); $pn.ForeColor='White'; $pn.Location=New-Object Drawing.Point(20,18); $pn.AutoSize=$true; $panel.Controls.Add($pn)
+$script:SysLabel=New-Object Windows.Forms.Label; $script:SysLabel.Font=New-Object Drawing.Font('Segoe UI',9); $script:SysLabel.ForeColor=[Drawing.Color]::FromArgb(190,198,212); $script:SysLabel.Location=New-Object Drawing.Point(20,60); $script:SysLabel.Size=New-Object Drawing.Size(340,230); $panel.Controls.Add($script:SysLabel)
+$note=New-Object Windows.Forms.Label; $note.Text='MODES`nNORMAL = Debloat เบื้องต้น`nHIGH = Debloat มากขึ้น`nCUSTOM = RAM / Win32 / Keyboard / Mouse + เปิด GPEDIT`n`nBACKUP ทำก่อนทุก Apply`nRESTORE คืน Registry + Service'; $note.ForeColor=[Drawing.Color]::FromArgb(160,170,185); $note.Location=New-Object Drawing.Point(20,300); $note.Size=New-Object Drawing.Size(340,105); $panel.Controls.Add($note)
+
+$script:LogBox=New-Object Windows.Forms.TextBox; $script:LogBox.Multiline=$true; $script:LogBox.ReadOnly=$true; $script:LogBox.ScrollBars='Vertical'; $script:LogBox.Font=New-Object Drawing.Font('Consolas',8); $script:LogBox.BackColor=[Drawing.Color]::FromArgb(9,12,17); $script:LogBox.ForeColor=[Drawing.Color]::FromArgb(185,200,220); $script:LogBox.Location=New-Object Drawing.Point(730,560); $script:LogBox.Size=New-Object Drawing.Size(380,115); $form.Controls.Add($script:LogBox)
+
+function Refresh-Main {
+    $script:SL.Text='STATUS • ' + $S.LastMode
+    try {
+        $i=Get-SystemInfo
+        $script:SysLabel.Text="CPU`n$($i.CPU)`n`nGPU`n$($i.GPU)`n`nWindows`n$($i.Windows)`n`nRAM`n$($i.RAM)"
+    } catch { $script:SysLabel.Text='SYSTEM INFO UNAVAILABLE' }
+}
+
+Refresh-Main
+Log 'LARZONE v3 started.'
+[void]$form.ShowDialog()
