@@ -1,0 +1,83 @@
+$ErrorActionPreference='SilentlyContinue'
+$Host.UI.RawUI.WindowTitle='LARZONE TUNE'
+function A{
+ $p=[Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+ $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+if(!(A)){Start-Process powershell "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs;exit}
+
+function R($p,$n,$v,$t='DWord'){
+ if(!(Test-Path $p)){New-Item $p -Force|Out-Null}
+ Set-ItemProperty $p $n $v -Type $t
+}
+function Perf($m){
+ $p='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
+ R $p NetworkThrottlingIndex 0xffffffff
+ R $p SystemResponsiveness 0
+ $g="$p\Tasks\Games"
+ R $g 'GPU Priority' 8
+ R $g Priority 6
+ R $g 'Scheduling Category' 'High' String
+ if($m -ge 2){
+  R 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR' AppCaptureEnabled 0
+  R 'HKCU:\System\GameConfigStore' GameDVR_Enabled 0
+ }
+ if($m -ge 3){powercfg /setactive SCHEME_MIN|Out-Null}
+ if($m -eq 4){
+  $q='HKLM:\SOFTWARE\Policies\Microsoft\Windows\Psched'
+  R $q NonBestEffortLimit 80
+  R 'HKCU:\Software\Microsoft\GameBar' AllowAutoGameMode 1
+  R 'HKCU:\Software\Microsoft\GameBar' AutoGameModeEnabled 1
+ }
+ Write-Host "`nLARZONE Performance $m applied." -ForegroundColor Green
+ Pause
+}
+function Net{
+ Write-Host "`nNetwork settings from the Larzone set:" -ForegroundColor Cyan
+ R 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' NetworkThrottlingIndex 0xffffffff
+ R 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' SystemResponsiveness 0
+ Write-Host 'Applied.' -ForegroundColor Green;Pause
+}
+function Mouse{
+ R 'HKCU:\Control Panel\Mouse' MouseSpeed 0
+ R 'HKCU:\Control Panel\Mouse' MouseThreshold1 0
+ R 'HKCU:\Control Panel\Mouse' MouseThreshold2 0
+ Write-Host "`nMouse input applied." -ForegroundColor Green;Pause
+}
+function Restore{
+ powercfg /setactive SCHEME_BALANCED|Out-Null
+ Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' NetworkThrottlingIndex -ErrorAction SilentlyContinue
+ Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' SystemResponsiveness -ErrorAction SilentlyContinue
+ R 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR' AppCaptureEnabled 1
+ R 'HKCU:\System\GameConfigStore' GameDVR_Enabled 1
+ Write-Host "`nRestored main settings." -ForegroundColor Yellow;Pause
+}
+while($true){
+ Clear-Host
+ Write-Host '╔══════════════════════════════════╗' -ForegroundColor Cyan
+ Write-Host '║          ⚡ LARZONE TUNE          ║' -ForegroundColor Magenta
+ Write-Host '╠══════════════════════════════════╣' -ForegroundColor Cyan
+ Write-Host '║ [1] Performance                  ║' -ForegroundColor Green
+ Write-Host '║ [2] Network                      ║' -ForegroundColor Blue
+ Write-Host '║ [3] Mouse / Input                ║' -ForegroundColor Yellow
+ Write-Host '║ [4] Restore                      ║' -ForegroundColor DarkYellow
+ Write-Host '║ [0] Exit                         ║' -ForegroundColor Gray
+ Write-Host '╚══════════════════════════════════╝' -ForegroundColor Cyan
+ $x=Read-Host ' Select'
+ switch($x){
+  '1'{
+   Clear-Host
+   Write-Host '=== PERFORMANCE ===' -ForegroundColor Cyan
+   Write-Host '[1] LOW    - ปลอดภัย' -ForegroundColor Green
+   Write-Host '[2] MEDIUM - สมดุล' -ForegroundColor Blue
+   Write-Host '[3] HIGH   - เน้นเกม' -ForegroundColor Yellow
+   Write-Host '[4] MAX    - ปรับเต็ม' -ForegroundColor Red
+   $m=Read-Host ' Select'
+   if($m -match '^[1-4]$'){Perf ([int]$m)}
+  }
+  '2'{Net}
+  '3'{Mouse}
+  '4'{Restore}
+  '0'{exit}
+ }
+}
