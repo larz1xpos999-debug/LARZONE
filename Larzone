@@ -244,35 +244,95 @@ function Confirm($Text) {
 
 # ---------- Simple Gaming ----------
 function Open-Gaming {
-    $f = New-SimpleWindow "LARZONE // GAMING MODE" 760 440
+    $f = New-SimpleWindow "LARZONE // GAMING MODE" 900 500
     Add-Title $f "GAMING MODE"
 
-    $n = Make-Button $f "NORMAL" 35 100 210 100 {
-        if (Confirm "ใช้ NORMAL หรือไม่?") { Apply-Normal; Info "NORMAL ใช้งานแล้ว`r`nBackup ถูกสร้างให้อัตโนมัติ" }
-    }
-    $h = Make-Button $f "HIGH" 275 100 210 100 {
-        if (Confirm "ใช้ HIGH หรือไม่?") { Apply-High; Info "HIGH ใช้งานแล้ว`r`nBackup ถูกสร้างให้อัตโนมัติ" }
-    }
-    $c = Make-Button $f "CUSTOM / DEBLOAT" 515 100 210 100 {
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = "เลือกโปรไฟล์ได้อิสระ — NORMAL / HIGH / CUSTOM / DEBLOAT"
+    $sub.Font = $font
+    $sub.AutoSize = $true
+    $sub.Location = New-Object System.Drawing.Point(35,75)
+    $f.Controls.Add($sub)
+
+    Make-Button $f "NORMAL" 35 125 195 100 {
+        if (Confirm "Apply NORMAL หรือไม่?") {
+            Apply-Normal
+            Info "NORMAL ใช้งานแล้ว"
+        }
+    } | Out-Null
+
+    Make-Button $f "HIGH" 245 125 195 100 {
+        if (Confirm "Apply HIGH หรือไม่?") {
+            Apply-High
+            Info "HIGH ใช้งานแล้ว"
+        }
+    } | Out-Null
+
+    Make-Button $f "CUSTOM" 455 125 195 100 {
         Open-Custom
-    }
+    } | Out-Null
+
+    Make-Button $f "DEBLOAT" 665 125 195 100 {
+        Open-Debloat
+    } | Out-Null
 
     $note = New-Object System.Windows.Forms.Label
-    $note.Text = "NORMAL / HIGH ไม่แตะ Win32 / Keyboard / Mouse / RAM`r`nCUSTOM ใช้เลือก tweak และ Debloat เอง"
+    $note.Text = "NORMAL / HIGH ไม่แตะ Win32 / Keyboard / Mouse / RAM`r`nCUSTOM และ DEBLOAT เลือกส่วนต่าง ๆ ได้เอง"
     $note.Font = $font
     $note.AutoSize = $true
-    $note.Location = New-Object System.Drawing.Point(40,235)
+    $note.Location = New-Object System.Drawing.Point(40,275)
     $f.Controls.Add($note)
 
-    Make-Button $f "ปิด" 300 320 160 55 { $f.Close() } | Out-Null
+    Make-Button $f "BACK" 275 360 160 55 { $f.Close() } | Out-Null
+    Make-Button $f "CLOSE" 465 360 160 55 { $f.Close() } | Out-Null
+
     [void]$f.ShowDialog()
 }
 
 # ---------- Simple Custom ----------
 function Open-Custom {
-    $f = New-SimpleWindow "LARZONE // CUSTOM / DEBLOAT" 900 650
+    $f = New-SimpleWindow "LARZONE // CUSTOM / DEBLOAT" 980 700
     Add-Title $f "CUSTOM / DEBLOAT"
 
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = "DEFAULT = โปรไฟล์แนะนำ | CUSTOM = เลือกเปิด/ปิดทุกส่วนได้อิสระ"
+    $sub.Font = $font
+    $sub.AutoSize = $true
+    $sub.Location = New-Object System.Drawing.Point(35,75)
+    $f.Controls.Add($sub)
+
+    # Profile buttons
+    Make-Button $f "DEFAULT" 35 105 200 60 {
+        foreach ($c in $checks.Values) { $c.Checked = $false }
+        foreach ($name in @("PRIVACY","BACKGROUND","WINDOWS UI","GAMING")) {
+            if ($checks.ContainsKey($name)) { $checks[$name].Checked = $true }
+        }
+        $profileLabel.Text = "PROFILE : DEFAULT"
+    } | Out-Null
+
+    Make-Button $f "CUSTOM" 250 105 200 60 {
+        $profileLabel.Text = "PROFILE : CUSTOM"
+    } | Out-Null
+
+    Make-Button $f "ALL ON" 465 105 150 60 {
+        foreach ($c in $checks.Values) { $c.Checked = $true }
+        $profileLabel.Text = "PROFILE : CUSTOM / ALL"
+    } | Out-Null
+
+    Make-Button $f "ALL OFF" 630 105 150 60 {
+        foreach ($c in $checks.Values) { $c.Checked = $false }
+        $profileLabel.Text = "PROFILE : CUSTOM / EMPTY"
+    } | Out-Null
+
+    $profileLabel = New-Object System.Windows.Forms.Label
+    $profileLabel.Text = "PROFILE : CUSTOM"
+    $profileLabel.Font = $font
+    $profileLabel.ForeColor = [System.Drawing.Color]::LightGreen
+    $profileLabel.AutoSize = $true
+    $profileLabel.Location = New-Object System.Drawing.Point(800,122)
+    $f.Controls.Add($profileLabel)
+
+    # Independent tweak categories
     $items = @(
         "DEBLOAT APPS",
         "PRIVACY",
@@ -284,34 +344,44 @@ function Open-Custom {
     )
 
     $checks = @{}
-    $y = 95
+    $y = 200
     foreach ($item in $items) {
         $cb = New-Object System.Windows.Forms.CheckBox
         $cb.Text = $item
         $cb.Font = $font
         $cb.ForeColor = [System.Drawing.Color]::White
         $cb.AutoSize = $true
-        $cb.Location = New-Object System.Drawing.Point(45,$y)
+        $cb.Location = New-Object System.Drawing.Point(55,$y)
         $f.Controls.Add($cb)
         $checks[$item] = $cb
-        $y += 42
+        $y += 48
     }
 
-    Make-Button $f "SELECT ALL" 300 95 160 45 {
-        foreach ($c in $checks.Values) { $c.Checked = $true }
+    # Default starting state
+    foreach ($name in @("PRIVACY","BACKGROUND","WINDOWS UI","GAMING")) {
+        $checks[$name].Checked = $true
+    }
+    $profileLabel.Text = "PROFILE : DEFAULT"
+
+    Make-Button $f "CONFIGURE DEBLOAT APPS" 450 215 370 60 {
+        Open-Debloat
     } | Out-Null
 
-    Make-Button $f "CLEAR" 480 95 160 45 {
-        foreach ($c in $checks.Values) { $c.Checked = $false }
-    } | Out-Null
+    Make-Button $f "APPLY SELECTED" 450 295 370 70 {
+        $selected = @(
+            $checks.GetEnumerator() |
+            Where-Object { $_.Value.Checked } |
+            ForEach-Object Key
+        )
 
-    Make-Button $f "APPLY SELECTED" 300 430 340 65 {
-        $selected = @($checks.GetEnumerator() | Where-Object { $_.Value.Checked } | ForEach-Object Key)
         if ($selected.Count -eq 0) {
-            Info "ยังไม่ได้เลือกอะไร"
+            Info "ยังไม่ได้เลือก tweak"
             return
         }
-        if (-not (Confirm ("จะใช้:`r`n- " + ($selected -join "`r`n- ") + "`r`n`r`nดำเนินการต่อหรือไม่?"))) { return }
+
+        if (-not (Confirm ("จะ Apply:`r`n- " + ($selected -join "`r`n- ") + "`r`n`r`nแต่ละส่วนทำงานแยกกัน และจะสร้าง Backup ก่อน`r`nดำเนินการต่อหรือไม่?"))) {
+            return
+        }
 
         if ($selected -contains "PRIVACY") { Apply-Privacy }
         if ($selected -contains "BACKGROUND") { Apply-Background }
@@ -324,51 +394,121 @@ function Open-Custom {
             Open-Debloat
         }
 
-        Info "ปรับแต่งที่เลือกเสร็จแล้ว"
+        Info "Apply ที่เลือกเสร็จแล้ว"
     } | Out-Null
 
-    Make-Button $f "ปิด" 360 515 220 50 { $f.Close() } | Out-Null
+    Make-Button $f "BACK" 450 390 175 55 { $f.Close() } | Out-Null
+    Make-Button $f "CLOSE" 645 390 175 55 { $f.Close() } | Out-Null
+
     [void]$f.ShowDialog()
 }
 
 # ---------- Debloat ----------
 function Open-Debloat {
-    $f = New-SimpleWindow "LARZONE // DEBLOAT APPS" 820 680
-    Add-Title $f "DEBLOAT APPS"
+    $f = New-SimpleWindow "LARZONE // DEBLOAT" 980 720
+    Add-Title $f "DEBLOAT"
+
+    $sub = New-Object System.Windows.Forms.Label
+    $sub.Text = "DEFAULT = รายการที่แนะนำ | CUSTOM = เลือกเปิด/ปิดแต่ละรายการเอง"
+    $sub.Font = $font
+    $sub.AutoSize = $true
+    $sub.Location = New-Object System.Drawing.Point(35,75)
+    $f.Controls.Add($sub)
 
     $checks = @{}
-    $y = 85
+    $y = 155
+    $column = 0
+
     foreach ($name in $Apps.Keys) {
         $cb = New-Object System.Windows.Forms.CheckBox
         $cb.Text = $name
         $cb.Font = $font
         $cb.ForeColor = [System.Drawing.Color]::White
         $cb.AutoSize = $true
-        $cb.Location = New-Object System.Drawing.Point(45,$y)
+
+        if ($column -eq 0) {
+            $cb.Location = New-Object System.Drawing.Point(45,$y)
+        } else {
+            $cb.Location = New-Object System.Drawing.Point(430,$y)
+        }
+
         $f.Controls.Add($cb)
         $checks[$name] = $cb
-        $y += 32
-        if ($y -gt 500) { break }
+
+        if ($column -eq 1) {
+            $column = 0
+            $y += 38
+        } else {
+            $column = 1
+        }
     }
 
-    Make-Button $f "SELECT ALL" 390 100 160 45 {
-        foreach ($c in $checks.Values) { $c.Checked = $true }
-    } | Out-Null
+    # Recommended default: conservative removable consumer apps.
+    $defaultApps = @(
+        "Feedback Hub",
+        "Get Help",
+        "Get Started",
+        "Solitaire",
+        "People",
+        "Weather",
+        "News",
+        "Maps",
+        "3D Viewer"
+    )
 
-    Make-Button $f "CLEAR" 570 100 160 45 {
+    foreach ($name in $defaultApps) {
+        if ($checks.ContainsKey($name)) { $checks[$name].Checked = $true }
+    }
+
+    Make-Button $f "DEFAULT" 45 500 180 60 {
         foreach ($c in $checks.Values) { $c.Checked = $false }
+        foreach ($name in $defaultApps) {
+            if ($checks.ContainsKey($name)) { $checks[$name].Checked = $true }
+        }
+        $mode.Text = "MODE : DEFAULT"
     } | Out-Null
 
-    Make-Button $f "REMOVE SELECTED" 390 430 340 60 {
-        $selected = @($checks.GetEnumerator() | Where-Object { $_.Value.Checked } | ForEach-Object Key)
-        if ($selected.Count -eq 0) { Info "ยังไม่ได้เลือกแอป"; return }
-        if (Confirm ("ลบแอปที่เลือก $($selected.Count) รายการหรือไม่?")) {
+    Make-Button $f "CUSTOM" 245 500 180 60 {
+        $mode.Text = "MODE : CUSTOM"
+    } | Out-Null
+
+    Make-Button $f "ALL ON" 445 500 160 60 {
+        foreach ($c in $checks.Values) { $c.Checked = $true }
+        $mode.Text = "MODE : CUSTOM / ALL"
+    } | Out-Null
+
+    Make-Button $f "ALL OFF" 625 500 160 60 {
+        foreach ($c in $checks.Values) { $c.Checked = $false }
+        $mode.Text = "MODE : CUSTOM / EMPTY"
+    } | Out-Null
+
+    $mode = New-Object System.Windows.Forms.Label
+    $mode.Text = "MODE : DEFAULT"
+    $mode.Font = $font
+    $mode.ForeColor = [System.Drawing.Color]::LightGreen
+    $mode.AutoSize = $true
+    $mode.Location = New-Object System.Drawing.Point(800,520)
+    $f.Controls.Add($mode)
+
+    Make-Button $f "REMOVE SELECTED" 45 590 360 65 {
+        $selected = @(
+            $checks.GetEnumerator() |
+            Where-Object { $_.Value.Checked } |
+            ForEach-Object Key
+        )
+        if ($selected.Count -eq 0) {
+            Info "ยังไม่ได้เลือกแอป"
+            return
+        }
+        if (Confirm ("จะลบ $($selected.Count) รายการ:`r`n" + ($selected -join ", ") + "`r`n`r`nดำเนินการต่อหรือไม่?")) {
             Apply-Debloat $selected
             Info "Debloat เสร็จแล้ว"
         }
     } | Out-Null
 
-    Make-Button $f "ปิด" 390 510 220 50 { $f.Close() } | Out-Null
+    Make-Button $f "BACK" 425 590 170 65 { $f.Close() } | Out-Null
+    Make-Button $f "CLOSE" 615 590 170 65 { $f.Close() } | Out-Null
+
     [void]$f.ShowDialog()
 }
 
@@ -449,7 +589,7 @@ function Open-Backup {
 $main = New-SimpleWindow "LARZONE // DEBLOAT V3.2.2" 820 620
 Add-Title $main "LARZONE // DEBLOAT"
 $subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = "V3.2.2 SIMPLE UI — เมนูเรียบง่าย กดตรง ๆ ไม่มี Panel ซ้อน"
+$subtitle.Text = "V3.2.3 FLEX UI — DEFAULT / CUSTOM เลือกได้อิสระ"
 $subtitle.Font = $font
 $subtitle.AutoSize = $true
 $subtitle.Location = New-Object System.Drawing.Point(35,72)
