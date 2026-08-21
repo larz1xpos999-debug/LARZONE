@@ -133,7 +133,7 @@ function Export-RegistryKey {
     )
 
     if (-not (Test-Path -LiteralPath ("Registry::" + $RegistryKey))) {
-        Write-Log "$Label: registry key not present; skipped."
+        Write-Log "${Label}: registry key not present; skipped."
         return [pscustomobject]@{
             Label = $Label
             Status = 'NotPresent'
@@ -145,7 +145,7 @@ function Export-RegistryKey {
     $exitCode = $LASTEXITCODE
 
     if (($exitCode -eq 0) -and (Test-Path -LiteralPath $OutputFile)) {
-        Write-Log "$Label: exported successfully."
+        Write-Log "${Label}: exported successfully."
         return [pscustomobject]@{
             Label = $Label
             Status = 'OK'
@@ -153,7 +153,7 @@ function Export-RegistryKey {
         }
     }
 
-    Write-Log "$Label: export failed with exit code $exitCode."
+    Write-Log "${Label}: export failed with exit code $exitCode."
     return [pscustomobject]@{
         Label = $Label
         Status = 'Failed'
@@ -197,6 +197,39 @@ function New-LarzoneBackup {
 
     Write-Log "Backup created: $folder"
     return $folder
+}
+
+function Restore-LarzoneBackup {
+    param([Parameter(Mandatory)][string]$BackupFolder)
+
+    if (-not (Test-Path -LiteralPath $BackupFolder)) {
+        Show-Message -Message "ไม่พบโฟลเดอร์ Backup:`r`n$BackupFolder" -Title "$AppName // RESTORE" -Icon ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $false
+    }
+
+    $regFiles = @(
+        @{ File = (Join-Path $BackupFolder 'Control.reg'); Label = 'Control' },
+        @{ File = (Join-Path $BackupFolder 'Keyboard.reg'); Label = 'Keyboard' },
+        @{ File = (Join-Path $BackupFolder 'Mouse.reg'); Label = 'Mouse' }
+    )
+
+    $failed = @()
+    foreach ($item in $regFiles) {
+        if (Test-Path -LiteralPath $item.File) {
+            & reg.exe import $item.File *> $null
+            if ($LASTEXITCODE -ne 0) {
+                $failed += $item.Label
+            }
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Show-Message -Message ("Restore มีรายการที่ไม่สำเร็จ:`r`n" + ($failed -join "`r`n")) -Title "$AppName // RESTORE" -Icon ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $false
+    }
+
+    Show-Message -Message "Restore สำเร็จ`r`n`r`n$BackupFolder`r`n`r`nแนะนำให้ Restart Windows" -Title "$AppName // RESTORE"
+    return $true
 }
 
 function Get-LarzoneStatus {
