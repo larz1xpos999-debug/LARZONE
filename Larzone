@@ -1,45 +1,199 @@
-# LARZONE DEBLOAT V3.1
-# NORMAL / HIGH / CUSTOM / CHECK STATUS / BACKUP / RESTORE
-# GPEDIT excluded. Keyboard and Mouse independent. RAM separate.
+# LARZONE // DEBLOAT V3.2
+# DEBLOAT / GAMING / SYSTEM / RAM are separated.
+# NORMAL/HIGH do not modify Keyboard, Mouse, Win32 or RAM.
+# CUSTOM allows independent values. Backup is verified before Apply.
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
-$ErrorActionPreference='SilentlyContinue'
-$id=[Security.Principal.WindowsIdentity]::GetCurrent();$pr=New-Object Security.Principal.WindowsPrincipal($id)
-if(-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){$p=New-Object Diagnostics.ProcessStartInfo;$p.FileName='powershell.exe';$p.Arguments="-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"";$p.Verb='runas';try{[Diagnostics.Process]::Start($p)|Out-Null}catch{};exit}
-$Base=Join-Path $env:ProgramData 'LARZONE\DebloatV3.1';$Backup=Join-Path $Base 'Backup';New-Item -ItemType Directory -Force -Path $Backup|Out-Null
-$Control='HKLM:\SYSTEM\CurrentControlSet\Control';$Kbd='HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters';$Mouse='HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters'
-$RamMap=[ordered]@{'4 GB'=0x400000;'8 GB'=0x800000;'12 GB'=0xC00000;'16 GB'=0x1000000;'24 GB'=0x1800000;'32 GB'=0x2000000;'64 GB'=0x4000000}
-$OptionalServices=@('DiagTrack','dmwappushservice','MapsBroker','XboxGipSvc','XblAuthManager','XblGameSave','XboxNetApiSvc')
-function Box($t,$title='LARZONE',[int]$i=64){[Windows.Forms.MessageBox]::Show($t,$title,0,$i)|Out-Null}
-function DWord($p,$n,[uint32]$v){New-Item -Path $p -Force|Out-Null;New-ItemProperty -Path $p -Name $n -PropertyType DWord -Value $v -Force|Out-Null}
-function ReadD($p,$n){try{(Get-ItemProperty -Path $p -Name $n -ErrorAction Stop).$n}catch{$null}}
-function Backup-State{try{$d=Join-Path $Backup (Get-Date -Format 'yyyyMMdd_HHmmss');New-Item -ItemType Directory -Force -Path $d|Out-Null;reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Control' "$d\Control.reg" /y|Out-Null;reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters' "$d\Keyboard.reg" /y|Out-Null;reg.exe export 'HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters' "$d\Mouse.reg" /y|Out-Null;$st=@();foreach($n in $OptionalServices){$s=Get-CimInstance Win32_Service -Filter "Name='$n'";if($s){$st+=[pscustomobject]@{Name=$s.Name;StartMode=$s.StartMode;State=$s.State}}};$st|ConvertTo-Json|Set-Content "$d\Services.json" -Encoding UTF8;$d}catch{$null}}
-function Restore-State{$d=Get-ChildItem $Backup -Directory|Sort-Object LastWriteTime -Descending|Select-Object -First 1;if(-not $d){Box 'ยังไม่พบ Backup' 'LARZONE // RESTORE' 48;return};if([Windows.Forms.MessageBox]::Show("Restore จาก Backup ล่าสุด?`r`n`r`n$($d.Name)",'LARZONE // RESTORE',4,48)-ne [Windows.Forms.DialogResult]::Yes){return};foreach($f in 'Control.reg','Keyboard.reg','Mouse.reg'){$x=Join-Path $d.FullName $f;if(Test-Path $x){reg.exe import $x|Out-Null}};$sf=Join-Path $d.FullName 'Services.json';if(Test-Path $sf){try{foreach($s in @(Get-Content $sf -Raw|ConvertFrom-Json)){switch($s.StartMode){'Auto'{Set-Service $s.Name -StartupType Automatic}'Manual'{Set-Service $s.Name -StartupType Manual}'Disabled'{Set-Service $s.Name -StartupType Disabled}}}}catch{}};Box 'Restore เสร็จแล้ว`r`n`nแนะนำ Restart Windows'}
-function Apply-Kbd($v){DWord $Kbd 'KeyboardDataQueueSize' ([uint32]$v)};function Apply-Mouse($v){DWord $Mouse 'MouseDataQueueSize' ([uint32]$v)};function Apply-Win32($v){DWord $Control 'Win32PrioritySeparation' ([uint32]$v)};function Apply-Ram($r){if($RamMap.Contains($r)){DWord $Control 'SvcHostSplitThresholdInKB' ([uint32]$RamMap[$r])}}
-function Disable-Optional{foreach($n in $OptionalServices){if(Get-Service $n -ErrorAction SilentlyContinue){Stop-Service $n -Force;Set-Service $n -StartupType Disabled}}}
-function SysInfo{$os=Get-CimInstance Win32_OperatingSystem;$cpu=Get-CimInstance Win32_Processor|Select-Object -First 1;$gpu=Get-CimInstance Win32_VideoController|Where-Object Name|Select-Object -First 1;$pc=Get-CimInstance Win32_ComputerSystem;[pscustomobject]@{Windows=$os.Caption;Build=$os.BuildNumber;CPU=$cpu.Name;GPU=$gpu.Name;RAM=[math]::Round($pc.TotalPhysicalMemory/1GB,1)}}
-function Hex($v){if($null -eq $v){'NOT SET'}else{'0x{0:X}'-f([uint32]$v)}}
-function Status-Report{$i=SysInfo;$a=@('LARZONE // CHECK STATUS','','SYSTEM',"Windows : $($i.Windows)","Build   : $($i.Build)","CPU     : $($i.CPU)","GPU     : $($i.GPU)","RAM     : $($i.RAM) GB",'','REGISTRY',"RAM / SvcHostSplitThresholdInKB : $(Hex(ReadD $Control 'SvcHostSplitThresholdInKB'))","Win32PrioritySeparation         : $(Hex(ReadD $Control 'Win32PrioritySeparation'))","KeyboardDataQueueSize            : $(Hex(ReadD $Kbd 'KeyboardDataQueueSize'))","MouseDataQueueSize               : $(Hex(ReadD $Mouse 'MouseDataQueueSize'))",'','OPTIONAL SERVICES');foreach($n in $OptionalServices){$s=Get-CimInstance Win32_Service -Filter "Name='$n'";if($s){$a+="$n : $($s.StartMode) / $($s.State)"}else{$a+="$n : NOT FOUND"}};$a+='';$a+='GPEDIT : NOT INCLUDED';$a-join "`r`n"}
-function Apply-Quick($mode){$b=Backup-State;if(-not $b){Box 'สร้าง Backup ไม่สำเร็จ จึงยกเลิกการ Apply' 'LARZONE' 48;return};Apply-Kbd 16;Apply-Mouse 25;Apply-Win32 ([uint32]0xFFF9887);Disable-Optional;Box "$mode APPLY เสร็จแล้ว`r`n`r`nKeyboard = 16`r`nMouse = 25`r`nWin32 = 0xFFF9887`r`n`r`nBackup: $($b.Name)" "LARZONE // $mode"}
-$form=New-Object Windows.Forms.Form;$form.Text='LARZONE // DEBLOAT V3.1';$form.Size=New-Object Drawing.Size(1080,700);$form.StartPosition='CenterScreen';$form.BackColor=[Drawing.Color]::FromArgb(8,11,18);$form.ForeColor=[Drawing.Color]::White;$form.FormBorderStyle='FixedSingle';$form.MaximizeBox=$false
-function AddLabel($text,$x,$y,$size=11,$bold=$false){$l=New-Object Windows.Forms.Label;$l.Text=$text;$l.Location=New-Object Drawing.Point($x,$y);$l.AutoSize=$true;$l.Font=New-Object Drawing.Font('Segoe UI',$size,([Drawing.FontStyle]$(if($bold){'Bold'}else{'Regular'})));$form.Controls.Add($l);$l}
-AddLabel 'LARZONE // DEBLOAT' 35 25 28 $true|Out-Null;AddLabel 'V3.1  // FiveM WINDOWS CONTROL PANEL' 39 75 11|Out-Null
-$status=AddLabel 'STATUS : READY' 850 45 11 $true;$status.ForeColor=[Drawing.Color]::LimeGreen
-function Btn($text,$x,$y,$w,$h){$b=New-Object Windows.Forms.Button;$b.Text=$text;$b.Location=New-Object Drawing.Point($x,$y);$b.Size=New-Object Drawing.Size($w,$h);$b.BackColor=[Drawing.Color]::FromArgb(17,23,35);$b.ForeColor=[Drawing.Color]::White;$b.FlatStyle='Flat';$b.Font=New-Object Drawing.Font('Segoe UI',11,[Drawing.FontStyle]::Bold);$form.Controls.Add($b);$b}
-$normal=Btn 'NORMAL' 35 125 285 75;$high=Btn 'HIGH' 335 125 285 75;$custom=Btn 'CUSTOM' 35 215 585 75;$check=Btn 'CHECK STATUS' 35 305 285 65;$backup=Btn 'BACKUP NOW' 335 305 285 65;$restore=Btn 'RESTORE LAST BACKUP' 35 390 585 65;$exit=Btn 'EXIT' 35 475 585 65
-$normal.Add_Click({Apply-Quick 'NORMAL'});$high.Add_Click({Apply-Quick 'HIGH'});$backup.Add_Click({$b=Backup-State;if($b){Box "Backup สร้างแล้ว`r`n`r`n$($b.FullName)" 'LARZONE // BACKUP'}else{Box 'สร้าง Backup ไม่สำเร็จ' 'LARZONE // BACKUP' 48}});$restore.Add_Click({Restore-State});$exit.Add_Click({$form.Close()})
-AddLabel 'SYSTEM NOTE' 665 125 16 $true|Out-Null
-$note=New-Object Windows.Forms.TextBox;$note.Multiline=$true;$note.ReadOnly=$true;$note.ScrollBars='Vertical';$note.Location=New-Object Drawing.Point(665,165);$note.Size=New-Object Drawing.Size(370,420);$note.BackColor=[Drawing.Color]::FromArgb(13,17,27);$note.ForeColor=[Drawing.Color]::White;$note.Font=New-Object Drawing.Font('Consolas',9);$note.Text="SYSTEM NOTE`r`n`r`nกด CHECK STATUS เพื่อดูค่าจริง`r`n`r`nCPU / GPU`r`nWindows / Build`r`nRAM`r`nRegistry values`r`nOptional services`r`n`r`nKeyboard / Mouse = Independent`r`nWin32 = FFF9887`r`nGPEDIT = NOT INCLUDED`r`nBackup = Automatic before Apply";$form.Controls.Add($note)
-$check.Add_Click({$note.Text=Status-Report;$status.Text='STATUS : CHECKED';$status.ForeColor=[Drawing.Color]::DeepSkyBlue})
-$custom.Add_Click({
- $d=New-Object Windows.Forms.Form;$d.Text='LARZONE // CUSTOM';$d.Size=New-Object Drawing.Size(760,610);$d.StartPosition='CenterParent';$d.BackColor=[Drawing.Color]::FromArgb(8,11,18);$d.ForeColor=[Drawing.Color]::White;$d.FormBorderStyle='FixedDialog';$d.MaximizeBox=$false
- $l=New-Object Windows.Forms.Label;$l.Text='CUSTOM // ADVANCED';$l.Font=New-Object Drawing.Font('Segoe UI',22,[Drawing.FontStyle]::Bold);$l.Location=New-Object Drawing.Point(25,20);$l.AutoSize=$true;$d.Controls.Add($l)
- function DL($t,$x,$y){$z=New-Object Windows.Forms.Label;$z.Text=$t;$z.Location=New-Object Drawing.Point($x,$y);$z.AutoSize=$true;$d.Controls.Add($z)};function DT($t,$x,$y){$z=New-Object Windows.Forms.TextBox;$z.Text=$t;$z.Location=New-Object Drawing.Point($x,$y);$z.Size=New-Object Drawing.Size(220,30);$z.Font=New-Object Drawing.Font('Consolas',10);$d.Controls.Add($z);$z}
- DL 'Keyboard Data Queue Size' 30 115;$kb=DT '16' 270 110;DL 'Mouse Data Queue Size' 30 165;$ms=DT '25' 270 160;DL 'Win32 Priority (HEX)' 30 215;$wx=DT 'FFF9887' 270 210;DL 'RAM Profile' 30 265
- $ram=New-Object Windows.Forms.ComboBox;$ram.Location=New-Object Drawing.Point(270,260);$ram.Size=New-Object Drawing.Size(220,30);$ram.DropDownStyle='DropDownList';foreach($r in $RamMap.Keys){[void]$ram.Items.Add($r)};$pc=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB);$ram.SelectedItem="$pc GB";if($ram.SelectedIndex -lt 0){$ram.SelectedIndex=0};$d.Controls.Add($ram)
- $ap=New-Object Windows.Forms.Button;$ap.Text='APPLY SELECTED';$ap.Location=New-Object Drawing.Point(30,330);$ap.Size=New-Object Drawing.Size(250,55);$ap.BackColor=[Drawing.Color]::FromArgb(17,23,35);$ap.ForeColor=[Drawing.Color]::White;$ap.FlatStyle='Flat';$d.Controls.Add($ap);$bk=New-Object Windows.Forms.Button;$bk.Text='BACK';$bk.Location=New-Object Drawing.Point(300,330);$bk.Size=New-Object Drawing.Size(160,55);$bk.BackColor=[Drawing.Color]::FromArgb(17,23,35);$bk.ForeColor=[Drawing.Color]::White;$bk.FlatStyle='Flat';$d.Controls.Add($bk);$bk.Add_Click({$d.Close()})
- $hint=New-Object Windows.Forms.Label;$hint.Text="Keyboard / Mouse = ปรับแยกกันได้`r`nWin32 = ใส่ HEX เองได้ เช่น FFF9887`r`nRAM = เลือกตามขนาด RAM`r`nBackup จะถูกสร้างก่อน Apply";$hint.Location=New-Object Drawing.Point(30,415);$hint.Size=New-Object Drawing.Size(650,100);$hint.ForeColor=[Drawing.Color]::Silver;$d.Controls.Add($hint)
- $ap.Add_Click({$b=Backup-State;if(-not $b){Box 'สร้าง Backup ไม่สำเร็จ จึงไม่ Apply' 'LARZONE // CUSTOM' 48;return};try{$k=0;$m=0;if(-not [int]::TryParse($kb.Text,[ref]$k)){throw 'Keyboard ต้องเป็นตัวเลข'};if(-not [int]::TryParse($ms.Text,[ref]$m)){throw 'Mouse ต้องเป็นตัวเลข'};if($k-lt 1-or$k-gt 255){throw 'Keyboard ต้องอยู่ 1-255'};if($m-lt 1-or$m-gt 255){throw 'Mouse ต้องอยู่ 1-255'};$h=$wx.Text.Trim();if($h.StartsWith('0x')){$h=$h.Substring(2)};if($h-notmatch '^[0-9A-Fa-f]{1,8}$'){throw 'Win32 ต้องเป็น HEX เช่น FFF9887'};$w=[Convert]::ToUInt32($h,16);Apply-Kbd $k;Apply-Mouse $m;Apply-Win32 $w;Apply-Ram ([string]$ram.SelectedItem);$status.Text='STATUS : CUSTOM APPLIED';$status.ForeColor=[Drawing.Color]::LimeGreen;Box "CUSTOM เสร็จแล้ว`r`n`r`nKeyboard = $k`r`nMouse = $m`r`nWin32 = 0x$h`r`nRAM = $($ram.SelectedItem)" 'LARZONE // CUSTOM';$d.Close()}catch{Box $_.Exception.Message 'LARZONE // CUSTOM' 16}});[void]$d.ShowDialog($form)
+$ErrorActionPreference="Continue"
+
+$Root="$env:ProgramData\LARZONE\DebloatV3.2"
+$BackupRoot="$Root\Backups"
+$ControlKey="HKLM:\SYSTEM\CurrentControlSet\Control"
+$KeyboardKey="HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters"
+$MouseKey="HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters"
+
+$RamValues=[ordered]@{
+ "Default"=0x380000;"4 GB"=0x400000;"6 GB"=0x600000;"8 GB"=0x800000
+ "12 GB"=0xC00000;"16 GB"=0x1000000;"24 GB"=0x1800000
+ "32 GB"=0x2000000;"64 GB"=0x4000000
+}
+
+# Conservative debloat apps; no critical input/network/audio services are touched.
+$DebloatApps=@(
+"Microsoft.BingNews","Microsoft.BingWeather","Microsoft.GetHelp",
+"Microsoft.Getstarted","Microsoft.MicrosoftOfficeHub",
+"Microsoft.MicrosoftSolitaireCollection","Microsoft.People",
+"Microsoft.Todos","Microsoft.WindowsFeedbackHub","Microsoft.WindowsMaps",
+"Microsoft.Xbox.TCUI","Microsoft.XboxGamingOverlay",
+"Microsoft.XboxIdentityProvider","Microsoft.XboxSpeechToTextOverlay",
+"Microsoft.ZuneMusic","Microsoft.ZuneVideo"
+)
+
+function Msg($t,$title="LARZONE",$icon=64){[void][Windows.Forms.MessageBox]::Show($t,$title,0,$icon)}
+function Dir($p){if(!(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Path $p -Force|Out-Null};Test-Path -LiteralPath $p}
+function GetD($p,$n){try{(Get-ItemProperty -Path $p -Name $n -ErrorAction Stop).$n}catch{$null}}
+function SetD($p,$n,[uint32]$v){if(!(Test-Path -LiteralPath $p)){New-Item -Path $p -Force|Out-Null};New-ItemProperty -Path $p -Name $n -PropertyType DWord -Value $v -Force|Out-Null}
+function Hex($v){if($null-eq$v){"NOT SET"}else{"0x{0:X}"-f([uint32]$v)}}
+
+function ExportChecked($key,$file){
+ & reg.exe export $key $file /y *> $null
+ $c=$LASTEXITCODE
+ [pscustomobject]@{Key=$key;Success=($c -eq 0 -and (Test-Path -LiteralPath $file));ExitCode=$c}
+}
+
+function Backup {
+ Dir $BackupRoot|Out-Null
+ $folder=Join-Path $BackupRoot (Get-Date -Format "yyyyMMdd_HHmmss")
+ Dir $folder|Out-Null
+ $r=@(
+  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Control" (Join-Path $folder "Control.reg")),
+  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" (Join-Path $folder "Keyboard.reg")),
+  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" (Join-Path $folder "Mouse.reg"))
+ )
+ $r|ConvertTo-Json -Depth 5|Set-Content (Join-Path $folder "BackupReport.json") -Encoding UTF8
+ $bad=@($r|Where-Object{!$_.Success})
+ if($bad.Count){Msg ("BACKUP ไม่สมบูรณ์`r`n`r`n"+(($bad|ForEach-Object{"$($_.Key) : exit $($_.ExitCode)"})-join "`r`n")) "LARZONE // BACKUP" 16;return $null}
+ $folder
+}
+
+function Status {
+ $os=Get-CimInstance Win32_OperatingSystem
+ $cpu=Get-CimInstance Win32_Processor|Select-Object -First 1
+ $gpu=Get-CimInstance Win32_VideoController|Where-Object Name|Select-Object -First 1
+ $ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
+ @(
+ "SYSTEM NOTE","────────────────────────────",
+ "CPU     : $($cpu.Name)","GPU     : $($gpu.Name)","RAM     : $ram GB",
+ "Windows : $($os.Caption)","Build   : $($os.BuildNumber)",
+ "","CURRENT VALUES","────────────────────────────",
+ "Win32   : $(Hex(GetD $ControlKey 'Win32PrioritySeparation'))",
+ "Keyboard: $(Hex(GetD $KeyboardKey 'KeyboardDataQueueSize'))",
+ "Mouse   : $(Hex(GetD $MouseKey 'MouseDataQueueSize'))",
+ "RAM     : $(Hex(GetD $ControlKey 'SvcHostSplitThresholdInKB'))",
+ "","NORMAL / HIGH = no Keyboard / Mouse / Win32 / RAM",
+ "CUSTOM = Keyboard / Mouse / Win32 editable","RAM = separate profile","GPEDIT = removed"
+ )-join "`r`n"
+}
+
+function Debloat {
+ $b=Backup;if(!$b){return}
+ $done=0;$skip=0
+ foreach($n in $DebloatApps){
+  try{
+   $apps=Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue
+   if($apps){foreach($a in $apps){Remove-AppxPackage -Package $a.PackageFullName -AllUsers -ErrorAction SilentlyContinue;$done++}}
+   else{$skip++}
+  }catch{$skip++}
+ }
+ Msg "DEBLOAT เสร็จแล้ว`r`n`r`nจัดการ: $done รายการ`r`nไม่พบ/ข้าม: $skip รายการ`r`n`r`nBackup:`r`n$b" "LARZONE // DEBLOAT"
+}
+
+function Quick($name){
+ $b=Backup;if(!$b){return}
+ foreach($n in $DebloatApps){
+  try{$apps=Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue;foreach($a in $apps){Remove-AppxPackage -Package $a.PackageFullName -AllUsers -ErrorAction SilentlyContinue}}catch{}
+ }
+ Msg "$name เสร็จแล้ว`r`n`r`nKeyboard / Mouse / Win32 / RAM = ไม่เปลี่ยน`r`n`r`nBackup:`r`n$b" "LARZONE // $name"
+}
+
+function Button($text,$x,$y,$w,$h){
+ $b=New-Object Windows.Forms.Button
+ $b.Text=$text;$b.Location=New-Object Drawing.Point($x,$y);$b.Size=New-Object Drawing.Size($w,$h)
+ $b.BackColor=[Drawing.Color]::FromArgb(17,23,35);$b.ForeColor=[Drawing.Color]::White
+ $b.FlatStyle="Flat";$b.Font=New-Object Drawing.Font("Segoe UI",11,[Drawing.FontStyle]::Bold)
+ $form.Controls.Add($b);$b
+}
+
+$form=New-Object Windows.Forms.Form
+$form.Text="LARZONE // DEBLOAT V3.2";$form.Size=New-Object Drawing.Size(1080,700)
+$form.StartPosition="CenterScreen";$form.BackColor=[Drawing.Color]::FromArgb(8,11,18)
+$form.ForeColor=[Drawing.Color]::White;$form.FormBorderStyle="FixedSingle";$form.MaximizeBox=$false
+
+$t=New-Object Windows.Forms.Label;$t.Text="LARZONE // DEBLOAT";$t.Font=New-Object Drawing.Font("Segoe UI",28,[Drawing.FontStyle]::Bold)
+$t.Location=New-Object Drawing.Point(30,20);$t.AutoSize=$true;$form.Controls.Add($t)
+$s=New-Object Windows.Forms.Label;$s.Text="V3.2  //  FIVE M WINDOWS CONTROL";$s.ForeColor=[Drawing.Color]::Silver
+$s.Location=New-Object Drawing.Point(34,68);$s.AutoSize=$true;$form.Controls.Add($s)
+
+$deb=Button "1. DEBLOAT" 35 120 280 75
+$gam=Button "2. GAMING" 330 120 280 75
+$sys=Button "3. SYSTEM / CUSTOM" 35 210 575 75
+$ram=Button "4. RAM PROFILE" 35 300 280 65
+$bak=Button "5. BACKUP / RESTORE" 330 300 280 65
+$sts=Button "6. SYSTEM NOTE" 35 380 575 65
+$nor=Button "NORMAL" 35 465 180 55
+$high=Button "HIGH" 230 465 180 55
+$cus=Button "CUSTOM" 425 465 185 55
+$exit=Button "EXIT" 35 540 575 55
+
+$note=New-Object Windows.Forms.TextBox;$note.Multiline=$true;$note.ReadOnly=$true;$note.ScrollBars="Vertical"
+$note.Location=New-Object Drawing.Point(650,120);$note.Size=New-Object Drawing.Size(380,475)
+$note.BackColor=[Drawing.Color]::FromArgb(13,17,27);$note.ForeColor=[Drawing.Color]::White
+$note.Font=New-Object Drawing.Font("Consolas",9);$note.Text=Status();$form.Controls.Add($note)
+
+$deb.Add_Click({Debloat})
+$nor.Add_Click({Quick "NORMAL"})
+$high.Add_Click({Quick "HIGH"})
+$sts.Add_Click({$note.Text=Status()})
+$exit.Add_Click({$form.Close()})
+$bak.Add_Click({$b=Backup;if($b){Msg "Backup สำเร็จ`r`n`r`n$b" "LARZONE // BACKUP"}})
+$gam.Add_Click({Msg "GAMING`r`n`r`nแยกจาก DEBLOAT แล้ว`r`nV3.2 ยังไม่ใส่ tweak เสี่ยงในส่วนนี้" "LARZONE // GAMING"})
+$sys.Add_Click({$cus.PerformClick()})
+
+$cus.Add_Click({
+ $d=New-Object Windows.Forms.Form;$d.Text="LARZONE // SYSTEM CUSTOM";$d.Size=New-Object Drawing.Size(700,470)
+ $d.StartPosition="CenterParent";$d.BackColor=[Drawing.Color]::FromArgb(8,11,18);$d.ForeColor=[Drawing.Color]::White
+ function Field($label,$value,$y){
+  $l=New-Object Windows.Forms.Label;$l.Text=$label;$l.Location=New-Object Drawing.Point(30,$y);$l.AutoSize=$true;$d.Controls.Add($l)
+  $z=New-Object Windows.Forms.TextBox;$z.Text=$value;$z.Location=New-Object Drawing.Point(280,($y-5));$z.Size=New-Object Drawing.Size(250,30);$z.Font=New-Object Drawing.Font("Consolas",10);$d.Controls.Add($z);$z
+ }
+ $kb=Field "Keyboard Queue Size" "16" 70
+ $ms=Field "Mouse Queue Size" "25" 120
+ $wx=Field "Win32 Priority (HEX)" "FFF9887" 170
+ $i=New-Object Windows.Forms.Label;$i.Text="ปรับเลขได้อิสระตามช่วงที่กำหนด`r`nRAM แยกอีกเมนู และ NORMAL/HIGH ไม่แตะค่าพวกนี้"
+ $i.Location=New-Object Drawing.Point(30,225);$i.Size=New-Object Drawing.Size(600,50);$i.ForeColor=[Drawing.Color]::Silver;$d.Controls.Add($i)
+ $a=New-Object Windows.Forms.Button;$a.Text="APPLY CUSTOM";$a.Location=New-Object Drawing.Point(30,320);$a.Size=New-Object Drawing.Size(250,55)
+ $a.BackColor=[Drawing.Color]::FromArgb(17,23,35);$a.ForeColor=[Drawing.Color]::White;$a.FlatStyle="Flat";$d.Controls.Add($a)
+ $q=New-Object Windows.Forms.Button;$q.Text="BACK";$q.Location=New-Object Drawing.Point(300,320);$q.Size=New-Object Drawing.Size(180,55)
+ $q.BackColor=[Drawing.Color]::FromArgb(17,23,35);$q.ForeColor=[Drawing.Color]::White;$q.FlatStyle="Flat";$d.Controls.Add($q);$q.Add_Click({$d.Close()})
+ $a.Add_Click({
+  try{
+   $b=Backup;if(!$b){return}
+   [int]$k=0;[int]$m=0
+   if(![int]::TryParse($kb.Text,[ref]$k)){throw "Keyboard ต้องเป็นตัวเลข"}
+   if(![int]::TryParse($ms.Text,[ref]$m)){throw "Mouse ต้องเป็นตัวเลข"}
+   if($k -lt 1 -or $k -gt 255){throw "Keyboard ต้องอยู่ระหว่าง 1-255"}
+   if($m -lt 1 -or $m -gt 255){throw "Mouse ต้องอยู่ระหว่าง 1-255"}
+   $hex=$wx.Text.Trim().Replace("0x","")
+   if($hex -notmatch "^[0-9A-Fa-f]{1,8}$"){throw "Win32 ต้องเป็น HEX เช่น FFF9887"}
+   [uint32]$w=[Convert]::ToUInt32($hex,16)
+   SetD $KeyboardKey "KeyboardDataQueueSize" ([uint32]$k)
+   SetD $MouseKey "MouseDataQueueSize" ([uint32]$m)
+   SetD $ControlKey "Win32PrioritySeparation" $w
+   Msg "CUSTOM สำเร็จ`r`n`r`nKeyboard = $k`r`nMouse = $m`r`nWin32 = 0x$hex`r`n`r`nBackup:`r`n$b" "LARZONE // CUSTOM";$d.Close()
+  }catch{Msg $_.Exception.Message "LARZONE // CUSTOM" 16}
+ })
+ [void]$d.ShowDialog($form)
 })
+
+$ram.Add_Click({
+ $d=New-Object Windows.Forms.Form;$d.Text="LARZONE // RAM PROFILE";$d.Size=New-Object Drawing.Size(560,360)
+ $d.StartPosition="CenterParent";$d.BackColor=[Drawing.Color]::FromArgb(8,11,18);$d.ForeColor=[Drawing.Color]::White
+ $c=New-Object Windows.Forms.ComboBox;$c.Location=New-Object Drawing.Point(30,70);$c.Size=New-Object Drawing.Size(300,32);$c.DropDownStyle="DropDownList"
+ foreach($k in $RamValues.Keys){[void]$c.Items.Add($k)}
+ $actual=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)
+ if($RamValues.Contains("$actual GB")){$c.SelectedItem="$actual GB"}else{$c.SelectedItem="Default"};$d.Controls.Add($c)
+ $a=New-Object Windows.Forms.Button;$a.Text="APPLY RAM";$a.Location=New-Object Drawing.Point(30,145);$a.Size=New-Object Drawing.Size(300,55)
+ $a.BackColor=[Drawing.Color]::FromArgb(17,23,35);$a.ForeColor=[Drawing.Color]::White;$a.FlatStyle="Flat";$d.Controls.Add($a)
+ $q=New-Object Windows.Forms.Button;$q.Text="BACK";$q.Location=New-Object Drawing.Point(350,145);$q.Size=New-Object Drawing.Size(150,55)
+ $q.BackColor=[Drawing.Color]::FromArgb(17,23,35);$q.ForeColor=[Drawing.Color]::White;$q.FlatStyle="Flat";$d.Controls.Add($q);$q.Add_Click({$d.Close()})
+ $a.Add_Click({
+  try{$b=Backup;if(!$b){return};$name=[string]$c.SelectedItem;SetD $ControlKey "SvcHostSplitThresholdInKB" ([uint32]$RamValues[$name])
+  Msg "RAM PROFILE สำเร็จ`r`n`r`n$name`r`nValue: $(Hex $RamValues[$name])`r`n`r`nBackup:`r`n$b" "LARZONE // RAM";$d.Close()
+  }catch{Msg $_.Exception.Message "LARZONE // RAM" 16}
+ })
+ [void]$d.ShowDialog($form)
+})
+
 [void]$form.ShowDialog()
