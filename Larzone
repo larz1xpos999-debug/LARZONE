@@ -1,4 +1,5 @@
-# LARZONE // DEBLOAT V3.2 FIXED
+# LARZONE // DEBLOAT V3.2 FINAL
+# Parser-safe / PowerShell 5.1 compatible build
 # V3.1 base, with DEBLOAT separated from SYSTEM/GAMING/RAM.
 # IMPORTANT:
 # - NORMAL/HIGH do NOT change Keyboard, Mouse, Win32PrioritySeparation, or RAM.
@@ -10,7 +11,6 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Continue'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -133,7 +133,7 @@ function Export-RegistryKey {
     )
 
     if (-not (Test-Path -LiteralPath ("Registry::" + $RegistryKey))) {
-        Write-Log "${Label}: registry key not present; skipped."
+        Write-Log ("{0}: registry key not present; skipped." -f $Label)
         return [pscustomobject]@{
             Label = $Label
             Status = 'NotPresent'
@@ -145,7 +145,7 @@ function Export-RegistryKey {
     $exitCode = $LASTEXITCODE
 
     if (($exitCode -eq 0) -and (Test-Path -LiteralPath $OutputFile)) {
-        Write-Log "${Label}: exported successfully."
+        Write-Log ("{0}: exported successfully." -f $Label)
         return [pscustomobject]@{
             Label = $Label
             Status = 'OK'
@@ -153,7 +153,7 @@ function Export-RegistryKey {
         }
     }
 
-    Write-Log "${Label}: export failed with exit code $exitCode."
+    Write-Log ("{0}: export failed with exit code {1}." -f $Label,$exitCode)
     return [pscustomobject]@{
         Label = $Label
         Status = 'Failed'
@@ -424,7 +424,7 @@ function Show-CustomEditor {
         $box.Text = $DefaultValue
         $box.Location = New-Object System.Drawing.Point(300,($Y - 5))
         $box.Size = New-Object System.Drawing.Size(280,30)
-        $box.Font = [System.Drawing.Font]::new('Consolas',10)
+        $box.Font = New-Object System.Drawing.Font('Consolas',10)
         $dialog.Controls.Add($box)
 
         return $box
@@ -645,14 +645,14 @@ function New-LarzoneButton {
     $button.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
     $button.ForeColor = [System.Drawing.Color]::White
     $button.FlatStyle = 'Flat'
-    $button.Font = [System.Drawing.Font]::new('Segoe UI',11,[System.Drawing.FontStyle]::Bold)
+    $button.Font = New-Object System.Drawing.Font('Segoe UI',11,[System.Drawing.FontStyle]::Bold)
     $form.Controls.Add($button)
     return $button
 }
 
 $title = New-Object System.Windows.Forms.Label
 $title.Text = 'LARZONE // DEBLOAT'
-$title.Font = [System.Drawing.Font]::new('Segoe UI',28,[System.Drawing.FontStyle]::Bold)
+$title.Font = New-Object System.Drawing.Font('Segoe UI',28,[System.Drawing.FontStyle]::Bold)
 $title.Location = New-Object System.Drawing.Point(30,20)
 $title.AutoSize = $true
 $form.Controls.Add($title)
@@ -683,7 +683,7 @@ $statusBox.Location = New-Object System.Drawing.Point(650,120)
 $statusBox.Size = New-Object System.Drawing.Size(380,475)
 $statusBox.BackColor = [System.Drawing.Color]::FromArgb(13,17,27)
 $statusBox.ForeColor = [System.Drawing.Color]::White
-$statusBox.Font = [System.Drawing.Font]::new('Consolas',9)
+$statusBox.Font = New-Object System.Drawing.Font('Consolas',9)
 $statusBox.Text = Get-LarzoneStatus
 $form.Controls.Add($statusBox)
 
