@@ -42,10 +42,13 @@ function Log($s) {
     Add-Content -LiteralPath $LogFile -Value ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),$s)
 }
 
-function Dword($Path,$Name,[int]$Value) {
+function Dword($Path,$Name,[uint32]$Value) {
     New-Item -Path $Path -Force | Out-Null
-    New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
-    Log "DWORD $Path\$Name=$Value"
+    $hex = ('0x{0:X8}' -f $Value)
+    $native = ($Path -replace '^HKLM:','HKLM' -replace '^HKCU:','HKCU')
+    & reg.exe ADD $native /v $Name /t REG_DWORD /d $hex /f | Out-Null
+    if($LASTEXITCODE -ne 0){ throw "Registry write failed: $native\$Name" }
+    Log "DWORD $Path\$Name=$hex"
 }
 
 function StringValue($Path,$Name,$Value) {
@@ -67,6 +70,9 @@ function New-Backup($profile="MANUAL") {
     Backup-Reg "HKCU\Software\Microsoft\GameBar" (Join-Path $dir "GameBar.reg")
     Backup-Reg "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" (Join-Path $dir "SystemProfile.reg")
     Backup-Reg "HKCU\Control Panel\Mouse" (Join-Path $dir "Mouse.reg")
+    Backup-Reg "HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" (Join-Path $dir "KeyboardClass.reg")
+    Backup-Reg "HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" (Join-Path $dir "MouseClass.reg")
+    Backup-Reg "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" (Join-Path $dir "PriorityControl.reg")
 
     try { powercfg /getactivescheme | Out-File (Join-Path $dir "PowerPlan.txt") -Encoding utf8 } catch {}
     try {
@@ -108,10 +114,14 @@ function Btn($Form,$Text,$X,$Y,$W,$H,$Action) {
     $b.Font = New-Object Drawing.Font("Segoe UI Semibold",11)
     $b.Location = New-Object Drawing.Point($X,$Y)
     $b.Size = New-Object Drawing.Size($W,$H)
-    $b.BackColor = [Drawing.Color]::FromArgb(25,50,82)
+    $b.BackColor = [Drawing.Color]::FromArgb(30,27,48)
     $b.ForeColor = [Drawing.Color]::White
     $b.FlatStyle = "Flat"
+    $b.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(105,85,220)
+    $b.FlatAppearance.BorderSize=1
     $b.Add_Click($Action)
+    $b.Add_MouseEnter({$this.BackColor=[Drawing.Color]::FromArgb(52,42,85)})
+    $b.Add_MouseLeave({$this.BackColor=[Drawing.Color]::FromArgb(30,27,48)})
     $Form.Controls.Add($b)
     return $b
 }
@@ -121,7 +131,7 @@ function New-Window($Title,$W=900,$H=650) {
     $f.Text = $Title
     $f.StartPosition = "CenterScreen"
     $f.ClientSize = New-Object Drawing.Size($W,$H)
-    $f.BackColor = [Drawing.Color]::FromArgb(10,15,24)
+    $f.BackColor = [Drawing.Color]::FromArgb(11,10,18)
     $f.ForeColor = [Drawing.Color]::White
     $f.FormBorderStyle = "FixedSingle"
     $f.MaximizeBox = $false
@@ -132,7 +142,7 @@ function Title($Form,$Text) {
     $l = New-Object Windows.Forms.Label
     $l.Text = $Text
     $l.Font = New-Object Drawing.Font("Segoe UI Semibold",22)
-    $l.ForeColor = [Drawing.Color]::FromArgb(70,185,255)
+    $l.ForeColor = [Drawing.Color]::FromArgb(145,120,255)
     $l.AutoSize = $true
     $l.Location = New-Object Drawing.Point(30,25)
     $Form.Controls.Add($l)
@@ -335,6 +345,18 @@ function Apply-Selected($selectedIds) {
     Add-SystemNote ("Custom/Debloat → Applied {0}, Verified {1}, Failed {2}" -f $selectedIds.Count,$okCount,$badCount); Info "Apply เสร็จ`r`n`r`nสำเร็จ: $okCount`r`nไม่ผ่าน/ตรวจสอบไม่ได้: $badCount`r`n`r`nBackup: $backup"
 }
 
+# ---------- Scroll helpers ----------
+function Scroll-Panel($panel,$delta) {
+    $max=[Math]::Max($panel.VerticalScroll.Minimum,$panel.VerticalScroll.Maximum-$panel.VerticalScroll.LargeChange+1)
+    $new=[Math]::Max($panel.VerticalScroll.Minimum,[Math]::Min($max,$panel.VerticalScroll.Value-$delta))
+    $panel.VerticalScroll.Value=$new
+    $panel.PerformLayout()
+}
+function Wire-MouseWheel($control,$panel) {
+    $control.Add_MouseWheel({ param($sender,$e) Scroll-Panel $panel ([int]$e.Delta) })
+    foreach($child in @($control.Controls)) { Wire-MouseWheel $child $panel }
+}
+
 # ---------- Category UI ----------
 function Open-Category($Category) {
     $items = @($Tweaks[$Category])
@@ -359,13 +381,6 @@ function Open-Category($Category) {
     $panel.TabStop = $true
     $f.Controls.Add($panel)
     $panel.Add_MouseEnter({ $panel.Focus() })
-    $panel.Add_MouseWheel({
-        param($sender,$e)
-        $step = [Math]::Max(40,[Math]::Abs($e.Delta))
-        if($e.Delta -gt 0){ $panel.VerticalScroll.Value=[Math]::Max($panel.VerticalScroll.Minimum,$panel.VerticalScroll.Value-$step) }
-        else { $panel.VerticalScroll.Value=[Math]::Min($panel.VerticalScroll.Maximum,$panel.VerticalScroll.Value+$step) }
-        $panel.PerformLayout()
-    })
 
     $checks=@{}
     $y=15
@@ -389,6 +404,8 @@ function Open-Category($Category) {
         $panel.Controls.Add($desc)
         $y+=68
     }
+    $panel.AutoScrollMinSize=New-Object Drawing.Size(0,($y+20))
+    Wire-MouseWheel $panel $panel
 
     # Keep action buttons fixed while only the list scrolls.
     Btn $f "DEFAULT" 35 610 165 50 {foreach($item in $items){$checks[$item.Id].Checked=[bool]$item.Default}} | Out-Null
@@ -397,7 +414,6 @@ function Open-Category($Category) {
     Btn $f "APPLY" 575 610 165 50 {
         $selected=@($checks.GetEnumerator()|Where-Object {$_.Value.Checked}|ForEach-Object Key)
         Apply-Selected $selected
-        Add-SystemNote ("$Category → Applied {0} tweaks" -f $selected.Count)
     } | Out-Null
     Btn $f "BACK" 755 610 165 50 {$f.Close()} | Out-Null
     [void]$f.ShowDialog()
@@ -426,24 +442,21 @@ function Open-Custom {
     $panel.BorderStyle = "FixedSingle"
     $f.Controls.Add($panel)
     $panel.Add_MouseEnter({$panel.Focus()})
-    $panel.Add_MouseWheel({
-        param($sender,$e)
-        $step=[Math]::Max(40,[Math]::Abs($e.Delta))
-        if($e.Delta -gt 0){$panel.VerticalScroll.Value=[Math]::Max($panel.VerticalScroll.Minimum,$panel.VerticalScroll.Value-$step)}
-        else{$panel.VerticalScroll.Value=[Math]::Min($panel.VerticalScroll.Maximum,$panel.VerticalScroll.Value+$step)}
-        $panel.PerformLayout()
-    })
 
     $categories = @($Tweaks.Keys)
     $y = 15
     foreach ($cat in $categories) {
-        $risk = if ($cat -eq "OPTIONAL / AGGRESSIVE") { "🔴" } else { "•" }
-        $catCopy=$cat
-        Btn $panel "$risk  $cat  >" 15 $y 790 48 {
-            Open-Category $catCopy
-        } | Out-Null
-        $y += 56
+        $risk = if ($cat -eq "OPTIONAL / AGGRESSIVE") { "🔴" } elseif ($cat -eq "SERVICES / TASKS") { "🟡" } else { "🟢" }
+        $b=New-Object Windows.Forms.Button
+        $b.Text="$risk  $cat  >"; $b.Font=New-Object Drawing.Font("Segoe UI Semibold",11)
+        $b.Location=New-Object Drawing.Point(15,$y); $b.Size=New-Object Drawing.Size(790,48)
+        $b.BackColor=[Drawing.Color]::FromArgb(30,27,48); $b.ForeColor=[Drawing.Color]::White; $b.FlatStyle="Flat"
+        $b.FlatAppearance.BorderColor=[Drawing.Color]::FromArgb(105,85,220); $b.Tag=$cat
+        $b.Add_Click({ Open-Category ([string]$this.Tag) })
+        $panel.Controls.Add($b); $y+=56
     }
+    $panel.AutoScrollMinSize=New-Object Drawing.Size(0,($y+20))
+    Wire-MouseWheel $panel $panel
 
     Btn $f "DEFAULT" 35 580 165 50 {
         Info "Default ถูกกำหนดไว้ในแต่ละหมวดแล้ว`r`nเข้าไปในหมวดเพื่อดูและปรับค่า"
@@ -495,81 +508,36 @@ function Open-Gaming {
 
 # ---------- System Profiles ----------
 function Parse-Number($text) {
-    $t=[string]$text
-    $t=$t.Trim()
-    if($t -match '^(0x)?[0-9a-fA-F]+$' -and $t -match '[a-fA-F]') {
-        if($t.StartsWith('0x')) { return [Convert]::ToUInt32($t.Substring(2),16) }
-        return [Convert]::ToUInt32($t,16)
+    $t=[string]$text; $t=$t.Trim()
+    if($t -match '^(0x)?[0-9a-fA-F]{1,8}$' -and ($t -match '[a-fA-F]' -or $t.StartsWith('0x'))) {
+        return [uint32]([Convert]::ToUInt64(($t -replace '^0x',''),16))
     }
     $n=0L
-    if([long]::TryParse($t,[ref]$n) -and $n -ge 0 -and $n -le 4294967295){ return [uint32]$n }
+    if([long]::TryParse($t,[ref]$n) -and $n -ge 0 -and $n -le 4294967295){return [uint32]$n}
     throw "Invalid number"
 }
 
 function Open-SystemProfile($Type) {
-    if($Type -eq "KEYBOARD"){
-        $f=New-Window "LARZONE // KEYBOARD" 560 380
-        Title $f "KEYBOARD"
-        $l=New-Object Windows.Forms.Label; $l.Text="Keyboard"; $l.AutoSize=$true
-        $l.Font=New-Object Drawing.Font("Segoe UI Semibold",12); $l.ForeColor=[Drawing.Color]::White
-        $l.Location=New-Object Drawing.Point(45,90); $f.Controls.Add($l)
-        $box=New-Object Windows.Forms.TextBox; $box.Text="16"; $box.Font=New-Object Drawing.Font("Segoe UI",12)
-        $box.Location=New-Object Drawing.Point(45,125); $box.Size=New-Object Drawing.Size(300,38); $f.Controls.Add($box)
-        Btn $f "DEFAULT" 45 200 135 50 {$box.Text="16"} | Out-Null
-        Btn $f "APPLY" 195 200 135 50 {
-            $n=0
-            if(-not [int]::TryParse($box.Text,[ref]$n) -or $n -lt 0){Info "ใส่ตัวเลข 0 ขึ้นไป";return}
-            New-Backup "KEYBOARD"
-            Dword "HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" "KeyboardDataQueueSize" $n
-            Add-SystemNote "Keyboard → $n"
-            Info "Keyboard → $n"
-        } | Out-Null
-        Btn $f "BACK" 345 200 135 50 {$f.Close()} | Out-Null
-        [void]$f.ShowDialog()
-        return
-    }
-    if($Type -eq "MOUSE"){
-        $f=New-Window "LARZONE // MOUSE" 560 380
-        Title $f "MOUSE"
-        $l=New-Object Windows.Forms.Label; $l.Text="Mouse"; $l.AutoSize=$true
-        $l.Font=New-Object Drawing.Font("Segoe UI Semibold",12); $l.ForeColor=[Drawing.Color]::White
-        $l.Location=New-Object Drawing.Point(45,90); $f.Controls.Add($l)
-        $box=New-Object Windows.Forms.TextBox; $box.Text="25"; $box.Font=New-Object Drawing.Font("Segoe UI",12)
-        $box.Location=New-Object Drawing.Point(45,125); $box.Size=New-Object Drawing.Size(300,38); $f.Controls.Add($box)
-        Btn $f "DEFAULT" 45 200 135 50 {$box.Text="25"} | Out-Null
-        Btn $f "APPLY" 195 200 135 50 {
-            $n=0
-            if(-not [int]::TryParse($box.Text,[ref]$n) -or $n -lt 0){Info "ใส่ตัวเลข 0 ขึ้นไป";return}
-            New-Backup "MOUSE"
-            Dword "HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" "MouseDataQueueSize" $n
-            Add-SystemNote "Mouse → $n"
-            Info "Mouse → $n"
-        } | Out-Null
-        Btn $f "BACK" 345 200 135 50 {$f.Close()} | Out-Null
-        [void]$f.ShowDialog()
-        return
-    }
-
-    # Win32: one free-form value; UI does not expose registry path.
-    $f=New-Window "LARZONE // WIN32" 560 380
-    Title $f "WIN32"
-    $l=New-Object Windows.Forms.Label; $l.Text="Win32"; $l.AutoSize=$true
-    $l.Font=New-Object Drawing.Font("Segoe UI Semibold",12); $l.ForeColor=[Drawing.Color]::White
-    $l.Location=New-Object Drawing.Point(45,90); $f.Controls.Add($l)
-    $box=New-Object Windows.Forms.TextBox; $box.Text="fff9887"; $box.Font=New-Object Drawing.Font("Segoe UI",12)
-    $box.Location=New-Object Drawing.Point(45,125); $box.Size=New-Object Drawing.Size(300,38); $f.Controls.Add($box)
-    $hint=New-Object Windows.Forms.Label; $hint.Text="ใส่เลขฐานสิบหรือฐานสิบหกได้"; $hint.AutoSize=$true
-    $hint.ForeColor=[Drawing.Color]::LightGray; $hint.Location=New-Object Drawing.Point(45,170); $f.Controls.Add($hint)
-    Btn $f "DEFAULT" 45 220 135 50 {$box.Text="fff9887"} | Out-Null
-    Btn $f "APPLY" 195 220 135 50 {
-        try { $n=Parse-Number $box.Text } catch { Info "ค่าไม่ถูกต้อง"; return }
-        New-Backup "WIN32"
-        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" ([int]$n)
-        Add-SystemNote ("Win32 → {0}" -f $box.Text)
-        Info "Win32 → $($box.Text)"
-    } | Out-Null
-    Btn $f "BACK" 345 220 135 50 {$f.Close()} | Out-Null
-
+    $f=New-Window "LARZONE // $Type" 620 420; Title $f $Type
+    $label=New-Object Windows.Forms.Label; $label.Text=$Type; $label.AutoSize=$true; $label.Font=New-Object Drawing.Font("Segoe UI Semibold",12); $label.Location=New-Object Drawing.Point(45,90); $f.Controls.Add($label)
+    $box=New-Object Windows.Forms.TextBox; $box.Font=New-Object Drawing.Font("Segoe UI",12); $box.Location=New-Object Drawing.Point(45,125); $box.Size=New-Object Drawing.Size(360,38); $f.Controls.Add($box)
+    $hint=New-Object Windows.Forms.Label; $hint.AutoSize=$true; $hint.ForeColor=[Drawing.Color]::LightGray; $hint.Location=New-Object Drawing.Point(45,172); $f.Controls.Add($hint)
+    if($Type -eq "KEYBOARD"){$box.Text="16";$hint.Text="ใส่ตัวเลขได้อิสระ";$path='HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters';$name='KeyboardDataQueueSize';$default='16';$hex=$false}
+    elseif($Type -eq "MOUSE"){$box.Text="25";$hint.Text="ใส่ตัวเลขได้อิสระ";$path='HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters';$name='MouseDataQueueSize';$default='25';$hex=$false}
+    elseif($Type -eq "WIN32"){$box.Text="FFF9887";$hint.Text="Hex DWORD • Default = FFF9887";$path='HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl';$name='Win32PrioritySeparation';$default='FFF9887';$hex=$true}
+    elseif($Type -eq "NETWORK"){$box.Text="FFFFFFFF";$hint.Text="Hex DWORD • Default = FFFFFFFF";$path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile';$name='NetworkThrottlingIndex';$default='FFFFFFFF';$hex=$true}
+    else{$f.Close();return}
+    Btn $f "DEFAULT" 45 225 150 50 {$box.Text=$default}|Out-Null
+    Btn $f "APPLY" 215 225 150 50 {
+        try{
+            if($hex){$value=Parse-Number $box.Text}else{$tmp=0;if(-not [int]::TryParse($box.Text,[ref]$tmp)-or$tmp-lt0){throw "Invalid number"};$value=[uint32]$tmp}
+            if(-not(Confirm "Apply $Type = $($box.Text)?")){return}
+            $backup=New-Backup $Type; Dword $path $name $value
+            $actual=(Get-ItemProperty -Path $path -Name $name -EA Stop).$name; $ok=([uint32]$actual -eq [uint32]$value)
+            if($ok){Add-SystemNote("$Type → $($box.Text) ✓");Info "Apply สำเร็จ`r`nVerify: SUCCESS`r`nBackup: $backup"}else{Add-SystemNote("$Type → Verify FAILED");Info "Verify ไม่ผ่าน"}
+        }catch{Add-SystemNote("$Type → FAILED: $($_.Exception.Message)");Info "Apply ไม่สำเร็จ`r`n$($_.Exception.Message)"}
+    }|Out-Null
+    Btn $f "BACK" 385 225 150 50 {$f.Close()}|Out-Null
     [void]$f.ShowDialog()
 }
 
@@ -592,6 +560,7 @@ function Open-System {
     Btn $f "WIN32" 40 175 190 60 { Open-SystemProfile "WIN32" } | Out-Null
     Btn $f "KEYBOARD" 245 175 190 60 { Open-SystemProfile "KEYBOARD" } | Out-Null
     Btn $f "MOUSE" 450 175 190 60 { Open-SystemProfile "MOUSE" } | Out-Null
+    Btn $f "NETWORK" 655 175 190 60 { Open-SystemProfile "NETWORK" } | Out-Null
 
     $ramLabel = New-Object Windows.Forms.Label
     $ramLabel.Text = "RAM PROFILE"
@@ -763,7 +732,7 @@ $main.Controls.Add($notePanel)
 $noteTitle = New-Object Windows.Forms.Label
 $noteTitle.Text = "SYSTEM NOTE  >"
 $noteTitle.Font = New-Object Drawing.Font("Segoe UI Semibold",14)
-$noteTitle.ForeColor = [Drawing.Color]::FromArgb(70,185,255)
+$noteTitle.ForeColor = [Drawing.Color]::FromArgb(145,120,255)
 $noteTitle.AutoSize = $true
 $noteTitle.Location = New-Object Drawing.Point(18,15)
 $notePanel.Controls.Add($noteTitle)
