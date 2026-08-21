@@ -172,6 +172,24 @@ $Tweaks = [ordered]@{
         @{Id="PowerPlan"; Name="High Performance Power Plan"; Desc="เลือก High Performance Power Plan"; Risk="MEDIUM"; Default=$false},
         @{Id="Animations"; Name="Disable Windows Animations"; Desc="ลด Animation ของ UI"; Risk="SAFE"; Default=$true}
     )
+    "DEBLOAT APPS" = @(
+        @{Id="RemoveConsumerApps"; Name="Remove Consumer App Packages"; Desc="ลดแอป consumer ที่ไม่จำเป็น"; Risk="MEDIUM"; Default=$false},
+        @{Id="RemoveXboxApps"; Name="Remove Xbox Apps"; Desc="ถอนแอป Xbox ที่เลือกได้"; Risk="MEDIUM"; Default=$false},
+        @{Id="RemoveClipchamp"; Name="Remove Clipchamp"; Desc="ถอน Clipchamp"; Risk="SAFE"; Default=$false},
+        @{Id="RemoveTeams"; Name="Remove Teams"; Desc="ถอน Teams ที่เป็น optional app"; Risk="MEDIUM"; Default=$false}
+    )
+    "SERVICES / TASKS" = @(
+        @{Id="ServicesReview"; Name="Services Review"; Desc="เปิดหน้าตรวจสอบ Service โดยไม่ปิดอัตโนมัติ"; Risk="MEDIUM"; Default=$false},
+        @{Id="TasksReview"; Name="Scheduled Tasks Review"; Desc="ตรวจสอบ task ที่เกี่ยวข้องกับ consumer/telemetry"; Risk="MEDIUM"; Default=$false}
+    )
+    "STARTUP / BOOT" = @(
+        @{Id="StartupAppsReview"; Name="Startup Apps Review"; Desc="เปิดรายการ Startup เพื่อเลือกเอง"; Risk="SAFE"; Default=$false},
+        @{Id="FastStartup"; Name="Fast Startup"; Desc="เลือกสถานะ Fast Startup"; Risk="MEDIUM"; Default=$false}
+    )
+    "UPDATES / SECURITY" = @(
+        @{Id="UpdateNotifications"; Name="Reduce Update Notifications"; Desc="ลดการแจ้งเตือนเกี่ยวกับ update"; Risk="SAFE"; Default=$false},
+        @{Id="DefenderNotifications"; Name="Reduce Defender Notifications"; Desc="ลดการแจ้งเตือน ไม่ได้ปิด Defender"; Risk="MEDIUM"; Default=$false}
+    )
     "OPTIONAL / AGGRESSIVE" = @(
         @{Id="OneDrive"; Name="Remove OneDrive"; Desc="ถอน OneDrive ออกจากระบบ"; Risk="MEDIUM"; Default=$false},
         @{Id="DisableUpdate"; Name="Disable Windows Update"; Desc="หยุด Windows Update"; Risk="RISKY"; Default=$false},
@@ -449,6 +467,95 @@ function Open-Gaming {
     [void]$f.ShowDialog()
 }
 
+
+# ---------- System Profiles ----------
+function Open-SystemProfile($Type) {
+    $f = New-Window "LARZONE // $Type" 900 650
+    Title $f $Type
+
+    $profiles = switch ($Type) {
+        "WIN32" {
+            @(
+                @{Id="Priority";Name="Multimedia / Gaming Priority";Desc="ตั้งค่าโปรไฟล์สำหรับงาน multimedia และเกม";Risk="MEDIUM";Default=$true},
+                @{Id="GPU";Name="GPU Scheduling Profile";Desc="โปรไฟล์การจัดการงาน GPU";Risk="MEDIUM";Default=$false},
+                @{Id="SystemResponsiveness";Name="System Responsiveness";Desc="ปรับการแบ่งทรัพยากรสำหรับงาน foreground";Risk="MEDIUM";Default=$false},
+                @{Id="NetworkThrottling";Name="Network Throttling Profile";Desc="ปรับ policy ของ multimedia network";Risk="MEDIUM";Default=$false},
+                @{Id="PowerProfile";Name="Power Profile";Desc="เลือกแนวทางประสิทธิภาพของระบบ";Risk="SAFE";Default=$false}
+            )
+        }
+        "KEYBOARD" {
+            @(
+                @{Id="KeyboardDelay";Name="Keyboard Delay";Desc="ปรับเวลาหน่วงก่อนเริ่มซ้ำปุ่ม";Risk="SAFE";Default=$false},
+                @{Id="KeyboardSpeed";Name="Keyboard Repeat Speed";Desc="ปรับความเร็วการกดค้าง";Risk="SAFE";Default=$false},
+                @{Id="DisableFilterKeys";Name="Disable Filter Keys";Desc="ลดโอกาสเปิด Filter Keys โดยไม่ตั้งใจ";Risk="SAFE";Default=$true},
+                @{Id="RawKeyboard";Name="Raw Keyboard Preference";Desc="เก็บโปรไฟล์อินพุตสำหรับเกม";Risk="MEDIUM";Default=$false}
+            )
+        }
+        "MOUSE" {
+            @(
+                @{Id="MouseAcceleration";Name="Disable Mouse Acceleration";Desc="ปิด acceleration ของเมาส์";Risk="SAFE";Default=$true},
+                @{Id="MouseSpeed";Name="Mouse Speed";Desc="ตั้งความเร็วเมาส์ Windows";Risk="SAFE";Default=$false},
+                @{Id="MouseThreshold";Name="Mouse Threshold";Desc="ปรับ threshold ของ pointer acceleration";Risk="SAFE";Default=$false},
+                @{Id="MouseEnhance";Name="Enhance Pointer Precision";Desc="เปิด/ปิด Windows pointer precision";Risk="MEDIUM";Default=$false}
+            )
+        }
+    }
+
+    $checks=@{}
+    $y=105
+    foreach($item in $profiles){
+        $cb=New-Object Windows.Forms.CheckBox
+        $cb.Text=$item.Name
+        $cb.Font=New-Object Drawing.Font("Segoe UI Semibold",11)
+        $cb.ForeColor=$RiskColor[$item.Risk]
+        $cb.AutoSize=$true
+        $cb.Location=New-Object Drawing.Point(45,$y)
+        $cb.Checked=[bool]$item.Default
+        $f.Controls.Add($cb)
+        $checks[$item.Id]=$cb
+
+        $d=New-Object Windows.Forms.Label
+        $d.Text=$item.Desc
+        $d.Font=New-Object Drawing.Font("Segoe UI",9)
+        $d.ForeColor=[Drawing.Color]::Gainsboro
+        $d.AutoSize=$true
+        $d.Location=New-Object Drawing.Point(70,($y+28))
+        $f.Controls.Add($d)
+        $y+=75
+    }
+
+    Btn $f "DEFAULT" 45 470 165 55 { foreach($i in $profiles){$checks[$i.Id].Checked=[bool]$i.Default} } | Out-Null
+    Btn $f "ALL ON" 220 470 165 55 { foreach($c in $checks.Values){$c.Checked=$true} } | Out-Null
+    Btn $f "ALL OFF" 395 470 165 55 { foreach($c in $checks.Values){$c.Checked=$false} } | Out-Null
+    Btn $f "APPLY" 570 470 165 55 {
+        if(-not (Confirm "สร้าง Backup ก่อน Apply โปรไฟล์ $Type หรือไม่?")){return}
+        New-Backup $Type
+        foreach($id in @($checks.GetEnumerator()|Where-Object {$_.Value.Checked}|ForEach-Object Key)){
+            switch($id){
+                "MouseAcceleration" {
+                    Dword "HKCU:\Control Panel\Mouse" "MouseSpeed" 0
+                    Dword "HKCU:\Control Panel\Mouse" "MouseThreshold1" 0
+                    Dword "HKCU:\Control Panel\Mouse" "MouseThreshold2" 0
+                }
+                "KeyboardDelay" { StringValue "HKCU:\Control Panel\Keyboard" "KeyboardDelay" "0" }
+                "KeyboardSpeed" { StringValue "HKCU:\Control Panel\Keyboard" "KeyboardSpeed" "31" }
+                "DisableFilterKeys" { Dword "HKCU:\Control Panel\Accessibility\Keyboard Response" "Flags" 122 }
+                "SystemResponsiveness" { Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" 10 }
+                "NetworkThrottling" { Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" 10 }
+                "PowerProfile" { powercfg /setactive SCHEME_MAX | Out-Null }
+                "Priority" {
+                    Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" 10
+                    Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "GPU Priority" 8
+                    Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Priority" 6
+                }
+            }
+        }
+        Info "$Type Apply แล้ว`r`nBackup ถูกสร้างไว้ก่อน Apply"
+    } | Out-Null
+    Btn $f "BACK" 745 470 100 55 {$f.Close()} | Out-Null
+    [void]$f.ShowDialog()
+}
+
 # ---------- System ----------
 function Open-System {
     $f = New-Window "LARZONE // SYSTEM" 900 620
@@ -466,15 +573,9 @@ function Open-System {
     $infoLabel.Location = New-Object Drawing.Point(40,80)
     $f.Controls.Add($infoLabel)
 
-    Btn $f "WIN32" 40 175 190 60 { Info "Win32 settings ใช้โปรไฟล์เดิมของ LARZONE" } | Out-Null
-    Btn $f "KEYBOARD" 245 175 190 60 { Info "Keyboard profile ใช้ค่าเดิมของ LARZONE" } | Out-Null
-    Btn $f "MOUSE" 450 175 190 60 {
-        New-Backup "MOUSE"
-        Dword "HKCU:\Control Panel\Mouse" "MouseSpeed" 0
-        Dword "HKCU:\Control Panel\Mouse" "MouseThreshold1" 0
-        Dword "HKCU:\Control Panel\Mouse" "MouseThreshold2" 0
-        Info "Mouse profile ถูก Apply แล้ว"
-    } | Out-Null
+    Btn $f "WIN32" 40 175 190 60 { Open-SystemProfile "WIN32" } | Out-Null
+    Btn $f "KEYBOARD" 245 175 190 60 { Open-SystemProfile "KEYBOARD" } | Out-Null
+    Btn $f "MOUSE" 450 175 190 60 { Open-SystemProfile "MOUSE" } | Out-Null
 
     $ramLabel = New-Object Windows.Forms.Label
     $ramLabel.Text = "RAM PROFILE"
@@ -507,7 +608,15 @@ function Open-System {
         $infoLabel.Text = "CPU : $((Get-CimInstance Win32_Processor | Select -First 1).Name)`r`nGPU : $((Get-CimInstance Win32_VideoController | Select -First 1).Name)`r`nRAM : $([math]::Round($now.TotalPhysicalMemory/1GB,0)) GB"
     } | Out-Null
 
-    Btn $f "BACK" 330 430 200 55 { $f.Close() } | Out-Null
+    $note = New-Object Windows.Forms.Label
+    $note.Text = "SYSTEM NOTE`r`n• Gaming NORMAL/HIGH ไม่เปลี่ยน RAM`r`n• RAM Profile ใช้ค่าเดิมของแต่ละโปรไฟล์`r`n• DEFAULT = ใช้ค่าที่ Windows ตรวจพบ/ค่า Default ของ LARZONE`r`n• Refresh ใช้สำหรับอ่านค่าฮาร์ดแวร์ปัจจุบันใหม่"
+    $note.Font = New-Object Drawing.Font("Segoe UI",9)
+    $note.ForeColor = [Drawing.Color]::LightGray
+    $note.AutoSize = $true
+    $note.Location = New-Object Drawing.Point(40,390)
+    $f.Controls.Add($note)
+
+    Btn $f "BACK" 330 500 200 55 { $f.Close() } | Out-Null
     [void]$f.ShowDialog()
 }
 
