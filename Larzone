@@ -1,199 +1,717 @@
-# LARZONE // DEBLOAT V3.2
-# DEBLOAT / GAMING / SYSTEM / RAM are separated.
-# NORMAL/HIGH do not modify Keyboard, Mouse, Win32 or RAM.
-# CUSTOM allows independent values. Backup is verified before Apply.
+# LARZONE // DEBLOAT V3.2 FIXED
+# V3.1 base, with DEBLOAT separated from SYSTEM/GAMING/RAM.
+# IMPORTANT:
+# - NORMAL/HIGH do NOT change Keyboard, Mouse, Win32PrioritySeparation, or RAM.
+# - RAM profile uses the exact values supplied by the user.
+# - Keyboard/Mouse/Win32 are available only in CUSTOM.
+# - No Windows services are disabled/removed by this script.
+# - Backup treats missing optional registry keys as "not present", not as a fatal error.
+
+#requires -Version 5.1
+#requires -RunAsAdministrator
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Continue'
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
-$ErrorActionPreference="Continue"
 
-$Root="$env:ProgramData\LARZONE\DebloatV3.2"
-$BackupRoot="$Root\Backups"
-$ControlKey="HKLM:\SYSTEM\CurrentControlSet\Control"
-$KeyboardKey="HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters"
-$MouseKey="HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters"
+$AppName = 'LARZONE V3.2'
+$Root = Join-Path $env:ProgramData 'LARZONE\V3.2'
+$BackupRoot = Join-Path $Root 'Backups'
+$LogRoot = Join-Path $Root 'Logs'
 
-$RamValues=[ordered]@{
- "Default"=0x380000;"4 GB"=0x400000;"6 GB"=0x600000;"8 GB"=0x800000
- "12 GB"=0xC00000;"16 GB"=0x1000000;"24 GB"=0x1800000
- "32 GB"=0x2000000;"64 GB"=0x4000000
+$ControlKey = 'HKLM:\SYSTEM\CurrentControlSet\Control'
+$KeyboardKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters'
+$MouseKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters'
+
+# Exact RAM table supplied by the user.
+$RamValues = [ordered]@{
+    'Default' = 0x380000
+    '4 GB'    = 0x400000
+    '6 GB'    = 0x600000
+    '8 GB'    = 0x800000
+    '12 GB'   = 0xC00000
+    '16 GB'   = 0x1000000
+    '24 GB'   = 0x1800000
+    '32 GB'   = 0x2000000
+    '64 GB'   = 0x4000000
 }
 
-# Conservative debloat apps; no critical input/network/audio services are touched.
-$DebloatApps=@(
-"Microsoft.BingNews","Microsoft.BingWeather","Microsoft.GetHelp",
-"Microsoft.Getstarted","Microsoft.MicrosoftOfficeHub",
-"Microsoft.MicrosoftSolitaireCollection","Microsoft.People",
-"Microsoft.Todos","Microsoft.WindowsFeedbackHub","Microsoft.WindowsMaps",
-"Microsoft.Xbox.TCUI","Microsoft.XboxGamingOverlay",
-"Microsoft.XboxIdentityProvider","Microsoft.XboxSpeechToTextOverlay",
-"Microsoft.ZuneMusic","Microsoft.ZuneVideo"
+# Conservative Appx debloat list.
+# Deliberately does not touch critical Windows services, networking, audio, keyboard, mouse, Defender, or Windows Update.
+$DebloatApps = @(
+    'Microsoft.BingNews',
+    'Microsoft.BingWeather',
+    'Microsoft.GetHelp',
+    'Microsoft.Getstarted',
+    'Microsoft.MicrosoftOfficeHub',
+    'Microsoft.MicrosoftSolitaireCollection',
+    'Microsoft.People',
+    'Microsoft.Todos',
+    'Microsoft.WindowsFeedbackHub',
+    'Microsoft.WindowsMaps',
+    'Microsoft.Xbox.TCUI',
+    'Microsoft.XboxGamingOverlay',
+    'Microsoft.XboxIdentityProvider',
+    'Microsoft.XboxSpeechToTextOverlay',
+    'Microsoft.ZuneMusic',
+    'Microsoft.ZuneVideo'
 )
 
-function Msg($t,$title="LARZONE",$icon=64){[void][Windows.Forms.MessageBox]::Show($t,$title,0,$icon)}
-function Dir($p){if(!(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Path $p -Force|Out-Null};Test-Path -LiteralPath $p}
-function GetD($p,$n){try{(Get-ItemProperty -Path $p -Name $n -ErrorAction Stop).$n}catch{$null}}
-function SetD($p,$n,[uint32]$v){if(!(Test-Path -LiteralPath $p)){New-Item -Path $p -Force|Out-Null};New-ItemProperty -Path $p -Name $n -PropertyType DWord -Value $v -Force|Out-Null}
-function Hex($v){if($null-eq$v){"NOT SET"}else{"0x{0:X}"-f([uint32]$v)}}
-
-function ExportChecked($key,$file){
- & reg.exe export $key $file /y *> $null
- $c=$LASTEXITCODE
- [pscustomobject]@{Key=$key;Success=($c -eq 0 -and (Test-Path -LiteralPath $file));ExitCode=$c}
+function Ensure-Directory {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+    return (Test-Path -LiteralPath $Path)
 }
 
-function Backup {
- Dir $BackupRoot|Out-Null
- $folder=Join-Path $BackupRoot (Get-Date -Format "yyyyMMdd_HHmmss")
- Dir $folder|Out-Null
- $r=@(
-  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Control" (Join-Path $folder "Control.reg")),
-  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" (Join-Path $folder "Keyboard.reg")),
-  (ExportChecked "HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" (Join-Path $folder "Mouse.reg"))
- )
- $r|ConvertTo-Json -Depth 5|Set-Content (Join-Path $folder "BackupReport.json") -Encoding UTF8
- $bad=@($r|Where-Object{!$_.Success})
- if($bad.Count){Msg ("BACKUP ไม่สมบูรณ์`r`n`r`n"+(($bad|ForEach-Object{"$($_.Key) : exit $($_.ExitCode)"})-join "`r`n")) "LARZONE // BACKUP" 16;return $null}
- $folder
+function Write-Log {
+    param([Parameter(Mandatory)][string]$Message)
+    try {
+        Ensure-Directory -Path $LogRoot | Out-Null
+        $file = Join-Path $LogRoot ((Get-Date).ToString('yyyy-MM-dd') + '.log')
+        Add-Content -LiteralPath $file -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Message) -Encoding UTF8
+    } catch {
+        # Logging must never stop the main operation.
+    }
 }
 
-function Status {
- $os=Get-CimInstance Win32_OperatingSystem
- $cpu=Get-CimInstance Win32_Processor|Select-Object -First 1
- $gpu=Get-CimInstance Win32_VideoController|Where-Object Name|Select-Object -First 1
- $ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
- @(
- "SYSTEM NOTE","────────────────────────────",
- "CPU     : $($cpu.Name)","GPU     : $($gpu.Name)","RAM     : $ram GB",
- "Windows : $($os.Caption)","Build   : $($os.BuildNumber)",
- "","CURRENT VALUES","────────────────────────────",
- "Win32   : $(Hex(GetD $ControlKey 'Win32PrioritySeparation'))",
- "Keyboard: $(Hex(GetD $KeyboardKey 'KeyboardDataQueueSize'))",
- "Mouse   : $(Hex(GetD $MouseKey 'MouseDataQueueSize'))",
- "RAM     : $(Hex(GetD $ControlKey 'SvcHostSplitThresholdInKB'))",
- "","NORMAL / HIGH = no Keyboard / Mouse / Win32 / RAM",
- "CUSTOM = Keyboard / Mouse / Win32 editable","RAM = separate profile","GPEDIT = removed"
- )-join "`r`n"
+function Show-Message {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [string]$Title = $AppName,
+        [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information
+    )
+    [void][System.Windows.Forms.MessageBox]::Show(
+        $Message,
+        $Title,
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        $Icon
+    )
 }
 
-function Debloat {
- $b=Backup;if(!$b){return}
- $done=0;$skip=0
- foreach($n in $DebloatApps){
-  try{
-   $apps=Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue
-   if($apps){foreach($a in $apps){Remove-AppxPackage -Package $a.PackageFullName -AllUsers -ErrorAction SilentlyContinue;$done++}}
-   else{$skip++}
-  }catch{$skip++}
- }
- Msg "DEBLOAT เสร็จแล้ว`r`n`r`nจัดการ: $done รายการ`r`nไม่พบ/ข้าม: $skip รายการ`r`n`r`nBackup:`r`n$b" "LARZONE // DEBLOAT"
+function Get-DwordValue {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name
+    )
+    try {
+        return (Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop).$Name
+    } catch {
+        return $null
+    }
 }
 
-function Quick($name){
- $b=Backup;if(!$b){return}
- foreach($n in $DebloatApps){
-  try{$apps=Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue;foreach($a in $apps){Remove-AppxPackage -Package $a.PackageFullName -AllUsers -ErrorAction SilentlyContinue}}catch{}
- }
- Msg "$name เสร็จแล้ว`r`n`r`nKeyboard / Mouse / Win32 / RAM = ไม่เปลี่ยน`r`n`r`nBackup:`r`n$b" "LARZONE // $name"
+function Set-DwordValue {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][uint32]$Value
+    )
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
+    New-ItemProperty -LiteralPath $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
 }
 
-function Button($text,$x,$y,$w,$h){
- $b=New-Object Windows.Forms.Button
- $b.Text=$text;$b.Location=New-Object Drawing.Point($x,$y);$b.Size=New-Object Drawing.Size($w,$h)
- $b.BackColor=[Drawing.Color]::FromArgb(17,23,35);$b.ForeColor=[Drawing.Color]::White
- $b.FlatStyle="Flat";$b.Font=New-Object Drawing.Font("Segoe UI",11,[Drawing.FontStyle]::Bold)
- $form.Controls.Add($b);$b
+function Format-Hex {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) {
+        return 'NOT SET'
+    }
+    return ('0x{0:X8}' -f ([uint32]$Value))
 }
 
-$form=New-Object Windows.Forms.Form
-$form.Text="LARZONE // DEBLOAT V3.2";$form.Size=New-Object Drawing.Size(1080,700)
-$form.StartPosition="CenterScreen";$form.BackColor=[Drawing.Color]::FromArgb(8,11,18)
-$form.ForeColor=[Drawing.Color]::White;$form.FormBorderStyle="FixedSingle";$form.MaximizeBox=$false
+function Export-RegistryKey {
+    param(
+        [Parameter(Mandatory)][string]$RegistryKey,
+        [Parameter(Mandatory)][string]$OutputFile,
+        [Parameter(Mandatory)][string]$Label
+    )
 
-$t=New-Object Windows.Forms.Label;$t.Text="LARZONE // DEBLOAT";$t.Font=New-Object Drawing.Font("Segoe UI",28,[Drawing.FontStyle]::Bold)
-$t.Location=New-Object Drawing.Point(30,20);$t.AutoSize=$true;$form.Controls.Add($t)
-$s=New-Object Windows.Forms.Label;$s.Text="V3.2  //  FIVE M WINDOWS CONTROL";$s.ForeColor=[Drawing.Color]::Silver
-$s.Location=New-Object Drawing.Point(34,68);$s.AutoSize=$true;$form.Controls.Add($s)
+    if (-not (Test-Path -LiteralPath ("Registry::" + $RegistryKey))) {
+        Write-Log "$Label: registry key not present; skipped."
+        return [pscustomobject]@{
+            Label = $Label
+            Status = 'NotPresent'
+            File = $OutputFile
+        }
+    }
 
-$deb=Button "1. DEBLOAT" 35 120 280 75
-$gam=Button "2. GAMING" 330 120 280 75
-$sys=Button "3. SYSTEM / CUSTOM" 35 210 575 75
-$ram=Button "4. RAM PROFILE" 35 300 280 65
-$bak=Button "5. BACKUP / RESTORE" 330 300 280 65
-$sts=Button "6. SYSTEM NOTE" 35 380 575 65
-$nor=Button "NORMAL" 35 465 180 55
-$high=Button "HIGH" 230 465 180 55
-$cus=Button "CUSTOM" 425 465 185 55
-$exit=Button "EXIT" 35 540 575 55
+    & reg.exe export $RegistryKey $OutputFile /y *> $null
+    $exitCode = $LASTEXITCODE
 
-$note=New-Object Windows.Forms.TextBox;$note.Multiline=$true;$note.ReadOnly=$true;$note.ScrollBars="Vertical"
-$note.Location=New-Object Drawing.Point(650,120);$note.Size=New-Object Drawing.Size(380,475)
-$note.BackColor=[Drawing.Color]::FromArgb(13,17,27);$note.ForeColor=[Drawing.Color]::White
-$note.Font=New-Object Drawing.Font("Consolas",9);$note.Text=Status();$form.Controls.Add($note)
+    if (($exitCode -eq 0) -and (Test-Path -LiteralPath $OutputFile)) {
+        Write-Log "$Label: exported successfully."
+        return [pscustomobject]@{
+            Label = $Label
+            Status = 'OK'
+            File = $OutputFile
+        }
+    }
 
-$deb.Add_Click({Debloat})
-$nor.Add_Click({Quick "NORMAL"})
-$high.Add_Click({Quick "HIGH"})
-$sts.Add_Click({$note.Text=Status()})
-$exit.Add_Click({$form.Close()})
-$bak.Add_Click({$b=Backup;if($b){Msg "Backup สำเร็จ`r`n`r`n$b" "LARZONE // BACKUP"}})
-$gam.Add_Click({Msg "GAMING`r`n`r`nแยกจาก DEBLOAT แล้ว`r`nV3.2 ยังไม่ใส่ tweak เสี่ยงในส่วนนี้" "LARZONE // GAMING"})
-$sys.Add_Click({$cus.PerformClick()})
+    Write-Log "$Label: export failed with exit code $exitCode."
+    return [pscustomobject]@{
+        Label = $Label
+        Status = 'Failed'
+        File = $OutputFile
+        ExitCode = $exitCode
+    }
+}
 
-$cus.Add_Click({
- $d=New-Object Windows.Forms.Form;$d.Text="LARZONE // SYSTEM CUSTOM";$d.Size=New-Object Drawing.Size(700,470)
- $d.StartPosition="CenterParent";$d.BackColor=[Drawing.Color]::FromArgb(8,11,18);$d.ForeColor=[Drawing.Color]::White
- function Field($label,$value,$y){
-  $l=New-Object Windows.Forms.Label;$l.Text=$label;$l.Location=New-Object Drawing.Point(30,$y);$l.AutoSize=$true;$d.Controls.Add($l)
-  $z=New-Object Windows.Forms.TextBox;$z.Text=$value;$z.Location=New-Object Drawing.Point(280,($y-5));$z.Size=New-Object Drawing.Size(250,30);$z.Font=New-Object Drawing.Font("Consolas",10);$d.Controls.Add($z);$z
- }
- $kb=Field "Keyboard Queue Size" "16" 70
- $ms=Field "Mouse Queue Size" "25" 120
- $wx=Field "Win32 Priority (HEX)" "FFF9887" 170
- $i=New-Object Windows.Forms.Label;$i.Text="ปรับเลขได้อิสระตามช่วงที่กำหนด`r`nRAM แยกอีกเมนู และ NORMAL/HIGH ไม่แตะค่าพวกนี้"
- $i.Location=New-Object Drawing.Point(30,225);$i.Size=New-Object Drawing.Size(600,50);$i.ForeColor=[Drawing.Color]::Silver;$d.Controls.Add($i)
- $a=New-Object Windows.Forms.Button;$a.Text="APPLY CUSTOM";$a.Location=New-Object Drawing.Point(30,320);$a.Size=New-Object Drawing.Size(250,55)
- $a.BackColor=[Drawing.Color]::FromArgb(17,23,35);$a.ForeColor=[Drawing.Color]::White;$a.FlatStyle="Flat";$d.Controls.Add($a)
- $q=New-Object Windows.Forms.Button;$q.Text="BACK";$q.Location=New-Object Drawing.Point(300,320);$q.Size=New-Object Drawing.Size(180,55)
- $q.BackColor=[Drawing.Color]::FromArgb(17,23,35);$q.ForeColor=[Drawing.Color]::White;$q.FlatStyle="Flat";$d.Controls.Add($q);$q.Add_Click({$d.Close()})
- $a.Add_Click({
-  try{
-   $b=Backup;if(!$b){return}
-   [int]$k=0;[int]$m=0
-   if(![int]::TryParse($kb.Text,[ref]$k)){throw "Keyboard ต้องเป็นตัวเลข"}
-   if(![int]::TryParse($ms.Text,[ref]$m)){throw "Mouse ต้องเป็นตัวเลข"}
-   if($k -lt 1 -or $k -gt 255){throw "Keyboard ต้องอยู่ระหว่าง 1-255"}
-   if($m -lt 1 -or $m -gt 255){throw "Mouse ต้องอยู่ระหว่าง 1-255"}
-   $hex=$wx.Text.Trim().Replace("0x","")
-   if($hex -notmatch "^[0-9A-Fa-f]{1,8}$"){throw "Win32 ต้องเป็น HEX เช่น FFF9887"}
-   [uint32]$w=[Convert]::ToUInt32($hex,16)
-   SetD $KeyboardKey "KeyboardDataQueueSize" ([uint32]$k)
-   SetD $MouseKey "MouseDataQueueSize" ([uint32]$m)
-   SetD $ControlKey "Win32PrioritySeparation" $w
-   Msg "CUSTOM สำเร็จ`r`n`r`nKeyboard = $k`r`nMouse = $m`r`nWin32 = 0x$hex`r`n`r`nBackup:`r`n$b" "LARZONE // CUSTOM";$d.Close()
-  }catch{Msg $_.Exception.Message "LARZONE // CUSTOM" 16}
- })
- [void]$d.ShowDialog($form)
+function New-LarzoneBackup {
+    Ensure-Directory -Path $BackupRoot | Out-Null
+
+    $folder = Join-Path $BackupRoot (Get-Date -Format 'yyyyMMdd_HHmmss')
+    Ensure-Directory -Path $folder | Out-Null
+
+    $items = @()
+    $items += Export-RegistryKey -RegistryKey 'HKLM\SYSTEM\CurrentControlSet\Control' `
+        -OutputFile (Join-Path $folder 'Control.reg') -Label 'Control'
+    $items += Export-RegistryKey -RegistryKey 'HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters' `
+        -OutputFile (Join-Path $folder 'Keyboard.reg') -Label 'Keyboard'
+    $items += Export-RegistryKey -RegistryKey 'HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters' `
+        -OutputFile (Join-Path $folder 'Mouse.reg') -Label 'Mouse'
+
+    $report = [ordered]@{
+        Created = (Get-Date).ToString('s')
+        Computer = $env:COMPUTERNAME
+        Windows = (Get-CimInstance Win32_OperatingSystem).Caption
+        Results = $items
+    }
+
+    $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $folder 'BackupReport.json') -Encoding UTF8
+
+    $failed = @($items | Where-Object { $_.Status -eq 'Failed' })
+    if ($failed.Count -gt 0) {
+        Write-Log 'Backup failed.'
+        Show-Message -Message (
+            "BACKUP ไม่สมบูรณ์`r`n`r`n" +
+            (($failed | ForEach-Object { "$($_.Label): export failed" }) -join "`r`n")
+        ) -Title "$AppName // BACKUP" -Icon ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $null
+    }
+
+    Write-Log "Backup created: $folder"
+    return $folder
+}
+
+function Get-LarzoneStatus {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+        $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | Select-Object -First 1
+        $computer = Get-CimInstance Win32_ComputerSystem
+        $ramGb = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+
+        return @(
+            'SYSTEM NOTE'
+            '────────────────────────────────'
+            "CPU      : $($cpu.Name)"
+            "GPU      : $($gpu.Name)"
+            "RAM      : $ramGb GB"
+            "Windows  : $($os.Caption)"
+            "Build    : $($os.BuildNumber)"
+            ''
+            'CURRENT VALUES'
+            '────────────────────────────────'
+            "Win32    : $(Format-Hex (Get-DwordValue -Path $ControlKey -Name 'Win32PrioritySeparation'))"
+            "Keyboard : $(Format-Hex (Get-DwordValue -Path $KeyboardKey -Name 'KeyboardDataQueueSize'))"
+            "Mouse    : $(Format-Hex (Get-DwordValue -Path $MouseKey -Name 'MouseDataQueueSize'))"
+            "RAM      : $(Format-Hex (Get-DwordValue -Path $ControlKey -Name 'SvcHostSplitThresholdInKB'))"
+            ''
+            'V3.2 RULES'
+            '────────────────────────────────'
+            'NORMAL / HIGH : no Keyboard / Mouse / Win32 / RAM'
+            'CUSTOM        : Keyboard / Mouse / Win32 only'
+            'RAM PROFILE   : uses supplied RAM table'
+            'DEBLOAT       : Appx apps only'
+            'SERVICES      : not modified'
+            'GPEDIT        : not modified'
+        ) -join [Environment]::NewLine
+    } catch {
+        return "Unable to read system information.`r`n$($_.Exception.Message)"
+    }
+}
+
+function Invoke-AppxDebloat {
+    param([switch]$Quiet)
+
+    $backup = New-LarzoneBackup
+    if (-not $backup) {
+        return $false
+    }
+
+    $removed = 0
+    $notFound = 0
+    $failed = 0
+
+    foreach ($packageName in $DebloatApps) {
+        try {
+            $packages = @(Get-AppxPackage -AllUsers -Name $packageName -ErrorAction SilentlyContinue)
+
+            if ($packages.Count -eq 0) {
+                $notFound++
+                continue
+            }
+
+            foreach ($package in $packages) {
+                try {
+                    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+                    $removed++
+                    Write-Log "Removed Appx: $($package.PackageFullName)"
+                } catch {
+                    $failed++
+                    Write-Log "Failed Appx: $($package.PackageFullName) - $($_.Exception.Message)"
+                }
+            }
+        } catch {
+            $failed++
+            Write-Log "Package lookup failed: $packageName - $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $Quiet) {
+        Show-Message -Message (
+            "DEBLOAT เสร็จแล้ว`r`n`r`n" +
+            "จัดการสำเร็จ : $removed`r`n" +
+            "ไม่พบ        : $notFound`r`n" +
+            "ล้มเหลว      : $failed`r`n`r`n" +
+            "Backup:`r`n$backup"
+        ) -Title "$AppName // DEBLOAT"
+    }
+
+    return $true
+}
+
+function Invoke-QuickProfile {
+    param([Parameter(Mandatory)][string]$ProfileName)
+
+    # Intentionally no Keyboard / Mouse / Win32 / RAM changes here.
+    $ok = Invoke-AppxDebloat -Quiet
+    if (-not $ok) {
+        return
+    }
+
+    Show-Message -Message (
+        "$ProfileName เสร็จแล้ว`r`n`r`n" +
+        "Keyboard / Mouse / Win32 / RAM = ไม่เปลี่ยน`r`n" +
+        "Services = ไม่เปลี่ยน"
+    ) -Title "$AppName // $ProfileName"
+}
+
+function Show-BackupList {
+    Ensure-Directory -Path $BackupRoot | Out-Null
+    $folders = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)
+
+    if ($folders.Count -eq 0) {
+        Show-Message -Message 'ยังไม่มี Backup ของ LARZONE V3.2' -Title "$AppName // BACKUP"
+        return
+    }
+
+    $list = ($folders | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
+    Show-Message -Message "Backup ที่มี:`r`n`r`n$list" -Title "$AppName // BACKUP"
+}
+
+function Restore-LatestBackup {
+    Ensure-Directory -Path $BackupRoot | Out-Null
+    $latest = Get-ChildItem -LiteralPath $BackupRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+
+    if ($null -eq $latest) {
+        Show-Message -Message 'ไม่พบ Backup สำหรับ Restore.' -Title "$AppName // RESTORE" -Icon ([System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        "Restore Backup ล่าสุด:`r`n$($latest.FullName)`r`n`r`nต้องการทำต่อหรือไม่?",
+        "$AppName // RESTORE",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+
+    if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+        return
+    }
+
+    $files = @('Control.reg','Keyboard.reg','Mouse.reg')
+    $imported = 0
+    $failed = 0
+
+    foreach ($file in $files) {
+        $path = Join-Path $latest.FullName $file
+        if (-not (Test-Path -LiteralPath $path)) {
+            continue
+        }
+
+        try {
+            & reg.exe import $path *> $null
+            if ($LASTEXITCODE -eq 0) {
+                $imported++
+            } else {
+                $failed++
+            }
+        } catch {
+            $failed++
+        }
+    }
+
+    Show-Message -Message (
+        "Restore เสร็จสิ้น`r`n`r`n" +
+        "Imported : $imported`r`n" +
+        "Failed   : $failed`r`n`r`n" +
+        "แนะนำให้ Restart Windows หลัง Restore"
+    ) -Title "$AppName // RESTORE"
+}
+
+function Show-CustomEditor {
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "$AppName // CUSTOM"
+    $dialog.Size = New-Object System.Drawing.Size(700, 470)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.BackColor = [System.Drawing.Color]::FromArgb(8,11,18)
+    $dialog.ForeColor = [System.Drawing.Color]::White
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+
+    function Add-Field {
+        param([string]$LabelText,[string]$DefaultValue,[int]$Y)
+
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $LabelText
+        $label.Location = New-Object System.Drawing.Point(30,$Y)
+        $label.AutoSize = $true
+        $dialog.Controls.Add($label)
+
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Text = $DefaultValue
+        $box.Location = New-Object System.Drawing.Point(300,($Y - 5))
+        $box.Size = New-Object System.Drawing.Size(280,30)
+        $box.Font = [System.Drawing.Font]::new('Consolas',10)
+        $dialog.Controls.Add($box)
+
+        return $box
+    }
+
+    $currentKeyboard = Get-DwordValue -Path $KeyboardKey -Name 'KeyboardDataQueueSize'
+    $currentMouse = Get-DwordValue -Path $MouseKey -Name 'MouseDataQueueSize'
+    $currentWin32 = Get-DwordValue -Path $ControlKey -Name 'Win32PrioritySeparation'
+
+    $keyboardDefault = if ($null -eq $currentKeyboard) { '16' } else { [string][uint32]$currentKeyboard }
+    $mouseDefault = if ($null -eq $currentMouse) { '25' } else { [string][uint32]$currentMouse }
+    $win32Default = if ($null -eq $currentWin32) { '0x00000000' } else { Format-Hex $currentWin32 }
+
+    $keyboardBox = Add-Field -LabelText 'Keyboard Queue Size' -DefaultValue $keyboardDefault -Y 70
+    $mouseBox = Add-Field -LabelText 'Mouse Queue Size' -DefaultValue $mouseDefault -Y 125
+    $win32Box = Add-Field -LabelText 'Win32 Priority (HEX)' -DefaultValue $win32Default -Y 180
+
+    $info = New-Object System.Windows.Forms.Label
+    $info.Text = "CUSTOM เท่านั้นที่แก้ 3 ค่านี้`r`nRAM อยู่ใน RAM PROFILE และ NORMAL/HIGH จะไม่แตะค่าเหล่านี้"
+    $info.Location = New-Object System.Drawing.Point(30,235)
+    $info.Size = New-Object System.Drawing.Size(600,55)
+    $info.ForeColor = [System.Drawing.Color]::Silver
+    $dialog.Controls.Add($info)
+
+    $apply = New-Object System.Windows.Forms.Button
+    $apply.Text = 'APPLY CUSTOM'
+    $apply.Location = New-Object System.Drawing.Point(30,325)
+    $apply.Size = New-Object System.Drawing.Size(250,55)
+    $apply.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
+    $apply.ForeColor = [System.Drawing.Color]::White
+    $apply.FlatStyle = 'Flat'
+    $dialog.Controls.Add($apply)
+
+    $close = New-Object System.Windows.Forms.Button
+    $close.Text = 'BACK'
+    $close.Location = New-Object System.Drawing.Point(300,325)
+    $close.Size = New-Object System.Drawing.Size(180,55)
+    $close.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
+    $close.ForeColor = [System.Drawing.Color]::White
+    $close.FlatStyle = 'Flat'
+    $dialog.Controls.Add($close)
+
+    $close.Add_Click({ $dialog.Close() })
+
+    $apply.Add_Click({
+        try {
+            $backup = New-LarzoneBackup
+            if ($null -eq $backup) {
+                return
+            }
+
+            [int]$keyboard = 0
+            [int]$mouse = 0
+
+            if (-not [int]::TryParse($keyboardBox.Text.Trim(), [ref]$keyboard)) {
+                throw 'Keyboard Queue Size ต้องเป็นตัวเลข'
+            }
+            if (-not [int]::TryParse($mouseBox.Text.Trim(), [ref]$mouse)) {
+                throw 'Mouse Queue Size ต้องเป็นตัวเลข'
+            }
+            if (($keyboard -lt 1) -or ($keyboard -gt 255)) {
+                throw 'Keyboard Queue Size ต้องอยู่ระหว่าง 1-255'
+            }
+            if (($mouse -lt 1) -or ($mouse -gt 255)) {
+                throw 'Mouse Queue Size ต้องอยู่ระหว่าง 1-255'
+            }
+
+            $hex = $win32Box.Text.Trim()
+            if ($hex.StartsWith('0x',[System.StringComparison]::OrdinalIgnoreCase)) {
+                $hex = $hex.Substring(2)
+            }
+            if ($hex -notmatch '^[0-9A-Fa-f]{1,8}$') {
+                throw 'Win32 Priority ต้องเป็น HEX เช่น FFF9887'
+            }
+
+            [uint32]$win32 = [Convert]::ToUInt32($hex,16)
+
+            Set-DwordValue -Path $KeyboardKey -Name 'KeyboardDataQueueSize' -Value ([uint32]$keyboard)
+            Set-DwordValue -Path $MouseKey -Name 'MouseDataQueueSize' -Value ([uint32]$mouse)
+            Set-DwordValue -Path $ControlKey -Name 'Win32PrioritySeparation' -Value $win32
+
+            Write-Log "CUSTOM applied: Keyboard=$keyboard Mouse=$mouse Win32=0x$hex"
+
+            Show-Message -Message (
+                "CUSTOM สำเร็จ`r`n`r`n" +
+                "Keyboard = $keyboard`r`n" +
+                "Mouse    = $mouse`r`n" +
+                "Win32    = 0x$hex`r`n`r`n" +
+                "Backup:`r`n$backup"
+            ) -Title "$AppName // CUSTOM"
+
+            $dialog.Close()
+        } catch {
+            Show-Message -Message $_.Exception.Message -Title "$AppName // CUSTOM" -Icon ([System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+
+    [void]$dialog.ShowDialog($form)
+}
+
+function Show-RamEditor {
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "$AppName // RAM PROFILE"
+    $dialog.Size = New-Object System.Drawing.Size(600, 380)
+    $dialog.StartPosition = 'CenterParent'
+    $dialog.BackColor = [System.Drawing.Color]::FromArgb(8,11,18)
+    $dialog.ForeColor = [System.Drawing.Color]::White
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.Location = New-Object System.Drawing.Point(30,75)
+    $combo.Size = New-Object System.Drawing.Size(330,32)
+    $combo.DropDownStyle = 'DropDownList'
+
+    foreach ($key in $RamValues.Keys) {
+        [void]$combo.Items.Add($key)
+    }
+
+    $actualRam = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+    if ($RamValues.Contains("$actualRam GB")) {
+        $combo.SelectedItem = "$actualRam GB"
+    } else {
+        $combo.SelectedItem = 'Default'
+    }
+    $dialog.Controls.Add($combo)
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = 'Value'
+    $label.Location = New-Object System.Drawing.Point(390,82)
+    $label.AutoSize = $true
+    $dialog.Controls.Add($label)
+
+    $valueLabel = New-Object System.Windows.Forms.Label
+    $valueLabel.Location = New-Object System.Drawing.Point(440,82)
+    $valueLabel.AutoSize = $true
+    $dialog.Controls.Add($valueLabel)
+
+    $updateValue = {
+        $selected = [string]$combo.SelectedItem
+        if ($RamValues.Contains($selected)) {
+            $valueLabel.Text = Format-Hex $RamValues[$selected]
+        }
+    }
+    $combo.Add_SelectedIndexChanged($updateValue)
+    & $updateValue
+
+    $apply = New-Object System.Windows.Forms.Button
+    $apply.Text = 'APPLY RAM'
+    $apply.Location = New-Object System.Drawing.Point(30,160)
+    $apply.Size = New-Object System.Drawing.Size(330,55)
+    $apply.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
+    $apply.ForeColor = [System.Drawing.Color]::White
+    $apply.FlatStyle = 'Flat'
+    $dialog.Controls.Add($apply)
+
+    $close = New-Object System.Windows.Forms.Button
+    $close.Text = 'BACK'
+    $close.Location = New-Object System.Drawing.Point(380,160)
+    $close.Size = New-Object System.Drawing.Size(150,55)
+    $close.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
+    $close.ForeColor = [System.Drawing.Color]::White
+    $close.FlatStyle = 'Flat'
+    $dialog.Controls.Add($close)
+    $close.Add_Click({ $dialog.Close() })
+
+    $apply.Add_Click({
+        try {
+            $backup = New-LarzoneBackup
+            if ($null -eq $backup) {
+                return
+            }
+
+            $selected = [string]$combo.SelectedItem
+            if (-not $RamValues.Contains($selected)) {
+                throw 'กรุณาเลือก RAM profile'
+            }
+
+            [uint32]$value = $RamValues[$selected]
+            Set-DwordValue -Path $ControlKey -Name 'SvcHostSplitThresholdInKB' -Value $value
+            Write-Log "RAM profile applied: $selected = $(Format-Hex $value)"
+
+            Show-Message -Message (
+                "RAM PROFILE สำเร็จ`r`n`r`n" +
+                "$selected`r`n" +
+                "Value = $(Format-Hex $value)`r`n`r`n" +
+                "Backup:`r`n$backup"
+            ) -Title "$AppName // RAM"
+
+            $dialog.Close()
+        } catch {
+            Show-Message -Message $_.Exception.Message -Title "$AppName // RAM" -Icon ([System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+
+    [void]$dialog.ShowDialog($form)
+}
+
+# ---------------- Main GUI ----------------
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "$AppName // DEBLOAT"
+$form.Size = New-Object System.Drawing.Size(1080,700)
+$form.StartPosition = 'CenterScreen'
+$form.BackColor = [System.Drawing.Color]::FromArgb(8,11,18)
+$form.ForeColor = [System.Drawing.Color]::White
+$form.FormBorderStyle = 'FixedSingle'
+$form.MaximizeBox = $false
+
+function New-LarzoneButton {
+    param([string]$Text,[int]$X,[int]$Y,[int]$Width,[int]$Height)
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($X,$Y)
+    $button.Size = New-Object System.Drawing.Size($Width,$Height)
+    $button.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
+    $button.ForeColor = [System.Drawing.Color]::White
+    $button.FlatStyle = 'Flat'
+    $button.Font = [System.Drawing.Font]::new('Segoe UI',11,[System.Drawing.FontStyle]::Bold)
+    $form.Controls.Add($button)
+    return $button
+}
+
+$title = New-Object System.Windows.Forms.Label
+$title.Text = 'LARZONE // DEBLOAT'
+$title.Font = [System.Drawing.Font]::new('Segoe UI',28,[System.Drawing.FontStyle]::Bold)
+$title.Location = New-Object System.Drawing.Point(30,20)
+$title.AutoSize = $true
+$form.Controls.Add($title)
+
+$subtitle = New-Object System.Windows.Forms.Label
+$subtitle.Text = 'V3.2 FIXED  //  FIVE M WINDOWS CONTROL'
+$subtitle.ForeColor = [System.Drawing.Color]::Silver
+$subtitle.Location = New-Object System.Drawing.Point(34,68)
+$subtitle.AutoSize = $true
+$form.Controls.Add($subtitle)
+
+$debloatButton = New-LarzoneButton -Text '1. DEBLOAT' -X 35 -Y 120 -Width 280 -Height 75
+$gamingButton = New-LarzoneButton -Text '2. GAMING' -X 330 -Y 120 -Width 280 -Height 75
+$systemButton = New-LarzoneButton -Text '3. SYSTEM / CUSTOM' -X 35 -Y 210 -Width 575 -Height 75
+$ramButton = New-LarzoneButton -Text '4. RAM PROFILE' -X 35 -Y 300 -Width 280 -Height 65
+$backupButton = New-LarzoneButton -Text '5. BACKUP / RESTORE' -X 330 -Y 300 -Width 280 -Height 65
+$statusButton = New-LarzoneButton -Text '6. SYSTEM NOTE' -X 35 -Y 380 -Width 575 -Height 65
+$normalButton = New-LarzoneButton -Text 'NORMAL' -X 35 -Y 465 -Width 180 -Height 55
+$highButton = New-LarzoneButton -Text 'HIGH' -X 230 -Y 465 -Width 180 -Height 55
+$customButton = New-LarzoneButton -Text 'CUSTOM' -X 425 -Y 465 -Width 185 -Height 55
+$exitButton = New-LarzoneButton -Text 'EXIT' -X 35 -Y 540 -Width 575 -Height 55
+
+$statusBox = New-Object System.Windows.Forms.TextBox
+$statusBox.Multiline = $true
+$statusBox.ReadOnly = $true
+$statusBox.ScrollBars = 'Vertical'
+$statusBox.Location = New-Object System.Drawing.Point(650,120)
+$statusBox.Size = New-Object System.Drawing.Size(380,475)
+$statusBox.BackColor = [System.Drawing.Color]::FromArgb(13,17,27)
+$statusBox.ForeColor = [System.Drawing.Color]::White
+$statusBox.Font = [System.Drawing.Font]::new('Consolas',9)
+$statusBox.Text = Get-LarzoneStatus
+$form.Controls.Add($statusBox)
+
+$debloatButton.Add_Click({ [void](Invoke-AppxDebloat) })
+
+$normalButton.Add_Click({
+    Invoke-QuickProfile -ProfileName 'NORMAL'
 })
 
-$ram.Add_Click({
- $d=New-Object Windows.Forms.Form;$d.Text="LARZONE // RAM PROFILE";$d.Size=New-Object Drawing.Size(560,360)
- $d.StartPosition="CenterParent";$d.BackColor=[Drawing.Color]::FromArgb(8,11,18);$d.ForeColor=[Drawing.Color]::White
- $c=New-Object Windows.Forms.ComboBox;$c.Location=New-Object Drawing.Point(30,70);$c.Size=New-Object Drawing.Size(300,32);$c.DropDownStyle="DropDownList"
- foreach($k in $RamValues.Keys){[void]$c.Items.Add($k)}
- $actual=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)
- if($RamValues.Contains("$actual GB")){$c.SelectedItem="$actual GB"}else{$c.SelectedItem="Default"};$d.Controls.Add($c)
- $a=New-Object Windows.Forms.Button;$a.Text="APPLY RAM";$a.Location=New-Object Drawing.Point(30,145);$a.Size=New-Object Drawing.Size(300,55)
- $a.BackColor=[Drawing.Color]::FromArgb(17,23,35);$a.ForeColor=[Drawing.Color]::White;$a.FlatStyle="Flat";$d.Controls.Add($a)
- $q=New-Object Windows.Forms.Button;$q.Text="BACK";$q.Location=New-Object Drawing.Point(350,145);$q.Size=New-Object Drawing.Size(150,55)
- $q.BackColor=[Drawing.Color]::FromArgb(17,23,35);$q.ForeColor=[Drawing.Color]::White;$q.FlatStyle="Flat";$d.Controls.Add($q);$q.Add_Click({$d.Close()})
- $a.Add_Click({
-  try{$b=Backup;if(!$b){return};$name=[string]$c.SelectedItem;SetD $ControlKey "SvcHostSplitThresholdInKB" ([uint32]$RamValues[$name])
-  Msg "RAM PROFILE สำเร็จ`r`n`r`n$name`r`nValue: $(Hex $RamValues[$name])`r`n`r`nBackup:`r`n$b" "LARZONE // RAM";$d.Close()
-  }catch{Msg $_.Exception.Message "LARZONE // RAM" 16}
- })
- [void]$d.ShowDialog($form)
+$highButton.Add_Click({
+    Invoke-QuickProfile -ProfileName 'HIGH'
 })
 
+$customButton.Add_Click({
+    Show-CustomEditor
+})
+
+$systemButton.Add_Click({
+    Show-CustomEditor
+})
+
+$ramButton.Add_Click({
+    Show-RamEditor
+})
+
+$statusButton.Add_Click({
+    $statusBox.Text = Get-LarzoneStatus
+})
+
+$backupButton.Add_Click({
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "YES = สร้าง Backup ใหม่`r`nNO = Restore Backup ล่าสุด`r`nCANCEL = ดูรายการ Backup",
+        "$AppName // BACKUP / RESTORE",
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $backup = New-LarzoneBackup
+        if ($null -ne $backup) {
+            Show-Message -Message "Backup สำเร็จ`r`n`r`n$backup" -Title "$AppName // BACKUP"
+        }
+    } elseif ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+        Restore-LatestBackup
+    } else {
+        Show-BackupList
+    }
+})
+
+$gamingButton.Add_Click({
+    Show-Message -Message (
+        "GAMING`r`n`r`n" +
+        "V3.2 แยกส่วน Gaming ออกจาก Debloat แล้ว`r`n" +
+        "ยังไม่ใส่ tweak ที่เสี่ยงต่อความเสถียรโดยอัตโนมัติ`r`n`r`n" +
+        "NORMAL/HIGH จะไม่เปลี่ยน Keyboard / Mouse / Win32 / RAM"
+    ) -Title "$AppName // GAMING"
+})
+
+$exitButton.Add_Click({
+    $form.Close()
+})
+
+Write-Log 'LARZONE V3.2 started.'
 [void]$form.ShowDialog()
