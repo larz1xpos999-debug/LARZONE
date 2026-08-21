@@ -351,12 +351,21 @@ function Open-Category($Category) {
     # Scroll area: mouse wheel + scrollbar work here.
     $panel = New-Object Windows.Forms.Panel
     $panel.AutoScroll = $true
-    $panel.VerticalScroll.SmallChange = 25
-    $panel.VerticalScroll.LargeChange = 120
+    $panel.VerticalScroll.SmallChange = 35
+    $panel.VerticalScroll.LargeChange = 140
     $panel.Location = New-Object Drawing.Point(25,105)
     $panel.Size = New-Object Drawing.Size(930,485)
     $panel.BorderStyle = "FixedSingle"
+    $panel.TabStop = $true
     $f.Controls.Add($panel)
+    $panel.Add_MouseEnter({ $panel.Focus() })
+    $panel.Add_MouseWheel({
+        param($sender,$e)
+        $step = [Math]::Max(40,[Math]::Abs($e.Delta))
+        if($e.Delta -gt 0){ $panel.VerticalScroll.Value=[Math]::Max($panel.VerticalScroll.Minimum,$panel.VerticalScroll.Value-$step) }
+        else { $panel.VerticalScroll.Value=[Math]::Min($panel.VerticalScroll.Maximum,$panel.VerticalScroll.Value+$step) }
+        $panel.PerformLayout()
+    })
 
     $checks=@{}
     $y=15
@@ -400,30 +409,46 @@ function Open-Custom {
     Title $f "CUSTOM / DEBLOAT"
 
     $desc = New-Object Windows.Forms.Label
-    $desc.Text = "DEFAULT = ชุดแนะนำ | CUSTOM = เลือกแต่ละค่าเอง"
-    $desc.Font = New-Object Drawing.Font("Segoe UI",11)
+    $desc.Text = "เลือกหมวดเพื่อปรับทีละค่า  •  🟢 SAFE  🟡 MEDIUM  🔴 RISKY"
+    $desc.Font = New-Object Drawing.Font("Segoe UI",10)
     $desc.AutoSize = $true
     $desc.Location = New-Object Drawing.Point(35,75)
     $f.Controls.Add($desc)
 
-    $categories = @($Tweaks.Keys)
-    $y = 125
+    # Main category list is itself scrollable; buttons at bottom stay fixed.
+    $panel = New-Object Windows.Forms.Panel
+    $panel.AutoScroll = $true
+    $panel.VerticalScroll.SmallChange = 35
+    $panel.VerticalScroll.LargeChange = 140
+    $panel.TabStop = $true
+    $panel.Location = New-Object Drawing.Point(25,105)
+    $panel.Size = New-Object Drawing.Size(850,455)
+    $panel.BorderStyle = "FixedSingle"
+    $f.Controls.Add($panel)
+    $panel.Add_MouseEnter({$panel.Focus()})
+    $panel.Add_MouseWheel({
+        param($sender,$e)
+        $step=[Math]::Max(40,[Math]::Abs($e.Delta))
+        if($e.Delta -gt 0){$panel.VerticalScroll.Value=[Math]::Max($panel.VerticalScroll.Minimum,$panel.VerticalScroll.Value-$step)}
+        else{$panel.VerticalScroll.Value=[Math]::Min($panel.VerticalScroll.Maximum,$panel.VerticalScroll.Value+$step)}
+        $panel.PerformLayout()
+    })
 
+    $categories = @($Tweaks.Keys)
+    $y = 15
     foreach ($cat in $categories) {
         $risk = if ($cat -eq "OPTIONAL / AGGRESSIVE") { "🔴" } else { "•" }
-        Btn $f "$risk  $cat  >" 35 $y 830 48 {
-            param($sender,$event)
-            $catName = $sender.Text -replace "^[^A-Z]*","" -replace "\s+>$",""
-            Open-Category $catName
+        $catCopy=$cat
+        Btn $panel "$risk  $cat  >" 15 $y 790 48 {
+            Open-Category $catCopy
         } | Out-Null
-        $y += 55
+        $y += 56
     }
 
-    Btn $f "DEFAULT ALL" 35 520 180 55 {
-        Info "Default ของแต่ละหมวดถูกฟิกไว้ในรายการย่อยแล้ว`r`nเข้าแต่ละหมวดเพื่อดู/ปรับค่า"
+    Btn $f "DEFAULT" 35 580 165 50 {
+        Info "Default ถูกกำหนดไว้ในแต่ละหมวดแล้ว`r`nเข้าไปในหมวดเพื่อดูและปรับค่า"
     } | Out-Null
-
-    Btn $f "BACK" 700 520 165 55 { $f.Close() } | Out-Null
+    Btn $f "BACK" 700 580 165 50 { $f.Close() } | Out-Null
     [void]$f.ShowDialog()
 }
 
@@ -469,6 +494,18 @@ function Open-Gaming {
 
 
 # ---------- System Profiles ----------
+function Parse-Number($text) {
+    $t=[string]$text
+    $t=$t.Trim()
+    if($t -match '^(0x)?[0-9a-fA-F]+$' -and $t -match '[a-fA-F]') {
+        if($t.StartsWith('0x')) { return [Convert]::ToUInt32($t.Substring(2),16) }
+        return [Convert]::ToUInt32($t,16)
+    }
+    $n=0L
+    if([long]::TryParse($t,[ref]$n) -and $n -ge 0 -and $n -le 4294967295){ return [uint32]$n }
+    throw "Invalid number"
+}
+
 function Open-SystemProfile($Type) {
     if($Type -eq "KEYBOARD"){
         $f=New-Window "LARZONE // KEYBOARD" 560 380
@@ -513,41 +550,26 @@ function Open-SystemProfile($Type) {
         return
     }
 
-    # Win32: editable numeric values, no registry paths shown in UI.
-    $f=New-Window "LARZONE // WIN32" 700 560
+    # Win32: one free-form value; UI does not expose registry path.
+    $f=New-Window "LARZONE // WIN32" 560 380
     Title $f "WIN32"
-    $defs=@(
-      @{Name="SystemResponsiveness";Default=10},
-      @{Name="NetworkThrottlingIndex";Default=10},
-      @{Name="GPU Priority";Default=8},
-      @{Name="Priority";Default=6}
-    )
-    $boxes=@{}; $y=85
-    foreach($x in $defs){
-        $l=New-Object Windows.Forms.Label; $l.Text=$x.Name; $l.AutoSize=$true
-        $l.Font=New-Object Drawing.Font("Segoe UI Semibold",11); $l.ForeColor=[Drawing.Color]::White
-        $l.Location=New-Object Drawing.Point(45,$y); $f.Controls.Add($l)
-        $b=New-Object Windows.Forms.TextBox; $b.Text=[string]$x.Default; $b.Font=New-Object Drawing.Font("Segoe UI",11)
-        $b.Location=New-Object Drawing.Point(280,$y-5); $b.Size=New-Object Drawing.Size(180,35); $f.Controls.Add($b)
-        $boxes[$x.Name]=$b; $y+=75
-    }
-    Btn $f "DEFAULT" 45 410 145 50 {foreach($x in $defs){$boxes[$x.Name].Text=[string]$x.Default}} | Out-Null
-    Btn $f "APPLY" 205 410 145 50 {
-        $v=@{}
-        foreach($x in $defs){
-            $n=0
-            if(-not [int]::TryParse($boxes[$x.Name].Text,[ref]$n) -or $n -lt 0){Info "ค่า $($x.Name) ไม่ถูกต้อง";return}
-            $v[$x.Name]=$n
-        }
+    $l=New-Object Windows.Forms.Label; $l.Text="Win32"; $l.AutoSize=$true
+    $l.Font=New-Object Drawing.Font("Segoe UI Semibold",12); $l.ForeColor=[Drawing.Color]::White
+    $l.Location=New-Object Drawing.Point(45,90); $f.Controls.Add($l)
+    $box=New-Object Windows.Forms.TextBox; $box.Text="fff9887"; $box.Font=New-Object Drawing.Font("Segoe UI",12)
+    $box.Location=New-Object Drawing.Point(45,125); $box.Size=New-Object Drawing.Size(300,38); $f.Controls.Add($box)
+    $hint=New-Object Windows.Forms.Label; $hint.Text="ใส่เลขฐานสิบหรือฐานสิบหกได้"; $hint.AutoSize=$true
+    $hint.ForeColor=[Drawing.Color]::LightGray; $hint.Location=New-Object Drawing.Point(45,170); $f.Controls.Add($hint)
+    Btn $f "DEFAULT" 45 220 135 50 {$box.Text="fff9887"} | Out-Null
+    Btn $f "APPLY" 195 220 135 50 {
+        try { $n=Parse-Number $box.Text } catch { Info "ค่าไม่ถูกต้อง"; return }
         New-Backup "WIN32"
-        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" $v["SystemResponsiveness"]
-        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" $v["NetworkThrottlingIndex"]
-        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "GPU Priority" $v["GPU Priority"]
-        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Priority" $v["Priority"]
-        Add-SystemNote "Win32 → Applied"
-        Info "Win32 Apply สำเร็จ"
+        Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "NetworkThrottlingIndex" ([int]$n)
+        Add-SystemNote ("Win32 → {0}" -f $box.Text)
+        Info "Win32 → $($box.Text)"
     } | Out-Null
-    Btn $f "BACK" 365 410 145 50 {$f.Close()} | Out-Null
+    Btn $f "BACK" 345 220 135 50 {$f.Close()} | Out-Null
+
     [void]$f.ShowDialog()
 }
 
@@ -671,8 +693,17 @@ function Get-SystemNotes {
     return @()
 }
 
+function Get-MachineSummary {
+    try {
+        $cpu=(Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+        $gpu=(Get-CimInstance Win32_VideoController | Where-Object {$_.Name} | Select-Object -First 1).Name
+        $ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,0)
+        return "เครื่อง: $env:COMPUTERNAME`r`nCPU: $cpu`r`nGPU: $gpu`r`nRAM: $ram GB"
+    } catch { return "เครื่อง: $env:COMPUTERNAME" }
+}
+
 function Show-SystemNote {
-    $f = New-Window "LARZONE // SYSTEM NOTE" 620 650
+    $f = New-Window "LARZONE // SYSTEM NOTE" 720 700
     Title $f "SYSTEM NOTE"
 
     $box = New-Object Windows.Forms.TextBox
@@ -684,11 +715,11 @@ function Show-SystemNote {
     $box.ForeColor = [Drawing.Color]::White
     $box.BackColor = [Drawing.Color]::FromArgb(15,22,32)
     $box.Location = New-Object Drawing.Point(30,85)
-    $box.Size = New-Object Drawing.Size(555,420)
+    $box.Size = New-Object Drawing.Size(655,440)
     $f.Controls.Add($box)
 
     function Refresh-NoteBox {
-        $box.Text = ((Get-SystemNotes) -join [Environment]::NewLine)
+        $box.Text = (Get-MachineSummary) + "`r`n`r`n" + ((Get-SystemNotes) -join [Environment]::NewLine)
         $box.SelectionStart = $box.TextLength
         $box.ScrollToCaret()
     }
@@ -750,9 +781,9 @@ $notePreview.Size = New-Object Drawing.Size(344,235)
 $notePanel.Controls.Add($notePreview)
 
 function Refresh-MainNote {
-    $notes = @(Read-SystemNotes)
+    $notes = @(Get-SystemNotes)
     if ($notes.Count -gt 5) { $notes = $notes[($notes.Count-5)..($notes.Count-1)] }
-    $notePreview.Text = (($notes) -join [Environment]::NewLine)
+    $notePreview.Text = (Get-MachineSummary) + "`r`n`r`n" + (($notes) -join [Environment]::NewLine)
     $notePreview.SelectionStart = $notePreview.TextLength
     $notePreview.ScrollToCaret()
 }
