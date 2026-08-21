@@ -324,10 +324,39 @@ $font = New-Object System.Drawing.Font("Segoe UI",10)
 $fontBig = New-Object System.Drawing.Font("Segoe UI Semibold",18)
 $fontTitle = New-Object System.Drawing.Font("Segoe UI Semibold",25)
 
+# UI LAYOUT FIX
+# Use explicit bounds instead of mixed Dock/Fill so the content panel can never
+# cover the navigation panel. This fixes buttons that appear visible but cannot
+# receive mouse clicks.
 $left = New-Object System.Windows.Forms.Panel
-$left.Dock = "Left"; $left.Width = 250
+$left.Width = 250
 $left.BackColor = [System.Drawing.Color]::FromArgb(15,23,38)
+$left.Anchor = "Top,Bottom,Left"
+$left.Location = New-Object System.Drawing.Point(0,0)
+$left.Size = New-Object System.Drawing.Size(250,$form.ClientSize.Height)
+
 $form.Controls.Add($left)
+
+$main = New-Object System.Windows.Forms.Panel
+$main.BackColor = [System.Drawing.Color]::FromArgb(10,15,25)
+$main.AutoScroll = $true
+$main.Anchor = "Top,Bottom,Left,Right"
+$main.Location = New-Object System.Drawing.Point(250,0)
+$main.Size = New-Object System.Drawing.Size(($form.ClientSize.Width - 250),$form.ClientSize.Height)
+$form.Controls.Add($main)
+
+$form.Add_Resize({
+    $left.Location = New-Object System.Drawing.Point(0,0)
+    $left.Size = New-Object System.Drawing.Size(250,$form.ClientSize.Height)
+    $main.Location = New-Object System.Drawing.Point(250,0)
+    $main.Size = New-Object System.Drawing.Size(
+        [Math]::Max(500,$form.ClientSize.Width - 250),
+        $form.ClientSize.Height
+    )
+    $left.BringToFront()
+    $main.SendToBack()
+})
+$left.BringToFront()
 
 $title = New-Object System.Windows.Forms.Label
 $title.Text = "LARZONE // DEBLOAT"
@@ -352,8 +381,12 @@ $form.Controls.Add($main)
 $pages = @{}
 function New-Page($name) {
     $p = New-Object System.Windows.Forms.Panel
-    $p.Dock = "Fill"; $p.AutoScroll = $true; $p.Visible = $false
-    $main.Controls.Add($p); $pages[$name] = $p
+    $p.Dock = "Fill"
+    $p.AutoScroll = $true
+    $p.Visible = $false
+    $p.BackColor = [System.Drawing.Color]::FromArgb(10,15,25)
+    $main.Controls.Add($p)
+    $pages[$name] = $p
     return $p
 }
 $home = New-Page "HOME"
@@ -365,8 +398,12 @@ $backup = New-Page "BACKUP"
 $note = New-Page "NOTE"
 
 function Show-Page($name) {
+    if (-not $pages.ContainsKey($name)) { return }
     foreach ($p in $pages.Values) { $p.Visible = $false }
     $pages[$name].Visible = $true
+    $pages[$name].BringToFront()
+    $main.BringToFront()
+    $left.BringToFront()
 }
 
 function Add-NavButton($text,$y,$page) {
@@ -375,11 +412,20 @@ function Add-NavButton($text,$y,$page) {
     $b.Font = $font
     $b.ForeColor = [System.Drawing.Color]::White
     $b.BackColor = [System.Drawing.Color]::FromArgb(25,35,55)
-    $b.FlatStyle = "Flat"; $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(45,140,220)
+    $b.FlatStyle = "Flat"
+    $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(45,140,220)
+    $b.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(35,55,85)
     $b.Size = New-Object System.Drawing.Size(210,48)
     $b.Location = New-Object System.Drawing.Point(20,$y)
-    $b.Add_Click({ Show-Page $page })
+
+    # Store destination in Tag instead of relying on a loop/function-scoped
+    # variable captured by the click handler.
+    $b.Tag = $page
+    $b.Add_Click({
+        Show-Page ([string]$this.Tag)
+    })
     $left.Controls.Add($b)
+    $b.BringToFront()
 }
 Add-NavButton "GAMING MODE" 110 "GAMING"
 Add-NavButton "CUSTOM / DEBLOAT" 165 "CUSTOM"
@@ -420,15 +466,36 @@ $profiles = @("NORMAL","HIGH","CUSTOM")
 $x=35
 foreach ($profile in $profiles) {
     $b=New-Object System.Windows.Forms.Button
-    $b.Text=$profile; $b.Font=$fontBig; $b.Size=New-Object System.Drawing.Size(240,90)
+    $b.Text=$profile
+    $b.Font=$fontBig
+    $b.Size=New-Object System.Drawing.Size(220,90)
     $b.Location=New-Object System.Drawing.Point($x,85)
     $b.BackColor=[System.Drawing.Color]::FromArgb(20,35,55)
     $b.ForeColor=[System.Drawing.Color]::White
     $b.FlatStyle="Flat"
-    if ($profile -eq "NORMAL") { $b.Add_Click({ Apply-Normal; $status.Text="STATUS: NORMAL APPLIED" }) }
-    elseif ($profile -eq "HIGH") { $b.Add_Click({ Apply-High; $status.Text="STATUS: HIGH APPLIED" }) }
-    else { $b.Add_Click({ Show-Page "CUSTOM" }) }
-    $gaming.Controls.Add($b); $x+=260
+    $b.FlatAppearance.BorderColor=[System.Drawing.Color]::FromArgb(70,150,230)
+    $b.FlatAppearance.MouseOverBackColor=[System.Drawing.Color]::FromArgb(35,65,100)
+
+    $b.Tag = $profile
+    $b.Add_Click({
+        switch ([string]$this.Tag) {
+            "NORMAL" {
+                Apply-Normal
+                $status.Text="STATUS: NORMAL APPLIED"
+            }
+            "HIGH" {
+                Apply-High
+                $status.Text="STATUS: HIGH APPLIED"
+            }
+            "CUSTOM" {
+                Show-Page "CUSTOM"
+                $status.Text="STATUS: CUSTOM / DEBLOAT"
+            }
+        }
+    })
+    $gaming.Controls.Add($b)
+    $b.BringToFront()
+    $x+=235
 }
 $gamingNote=New-Object System.Windows.Forms.Label
 $gamingNote.Text="NORMAL / HIGH ไม่แตะ Win32 • Keyboard • Mouse • RAM`r`nCUSTOM = เลือกเองจากหน้า CUSTOM / DEBLOAT"
@@ -650,4 +717,6 @@ $noteText.Font=$fontBig; $noteText.AutoSize=$true; $noteText.Location=New-Object
 $note.Controls.Add($noteText)
 
 Show-Page "GAMING"
+$left.BringToFront()
+$main.SendToBack()
 [void]$form.ShowDialog()
