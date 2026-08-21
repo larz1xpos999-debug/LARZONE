@@ -1,730 +1,675 @@
-#requires -version 5.1
-# LARZONE // DEBLOAT V3.2.3
-# SIMPLE UI EDITION
-# เน้น: หน้าต่างเรียบง่าย / ปุ่มใหญ่ / ไม่มี Dock / ไม่มี Panel ซ้อน / เมนูย่อยเป็น Dialog
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "SilentlyContinue"
+# LARZONE // DEBLOAT V3.2 BIG
+# Original Windows 11 optimization utility layout.
+# Main: CUSTOM/DEBLOAT | GAMING MODE | SYSTEM | BACKUP/RESTORE | SYSTEM NOTE
+# GAMING MODE -> NORMAL / HIGH / CUSTOM-DEBLOAT
+# SYSTEM -> Win32 / Keyboard / Mouse / RAM + REFRESH
+# NORMAL/HIGH never change Win32, Keyboard, Mouse or RAM.
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
-# ---------- Admin ----------
-$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator
-)
-if (-not $admin) {
-    [System.Windows.Forms.MessageBox]::Show(
-        "กรุณาเปิดไฟล์นี้ด้วย Run as administrator",
-        "LARZONE V3.2.3",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    ) | Out-Null
-    exit
-}
-
-# ---------- Storage ----------
-$Root = Join-Path $env:ProgramData "LARZONE\V3.2.3"
+$ErrorActionPreference = "Continue"
+$AppName = "LARZONE // DEBLOAT"
+$Version = "V3.2 BIG"
+$Root = Join-Path $env:ProgramData "LARZONE\V3.2"
 $BackupRoot = Join-Path $Root "Backups"
-$LogRoot = Join-Path $Root "Logs"
-New-Item -ItemType Directory -Force -Path $BackupRoot,$LogRoot | Out-Null
-$LogFile = Join-Path $LogRoot ("LARZONE_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+$LogFile = Join-Path $Root "larzone.log"
 
-function Write-Log($Text) {
-    Add-Content -LiteralPath $LogFile -Value ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),$Text)
+$ControlKey  = "HKLM:\SYSTEM\CurrentControlSet\Control"
+$KeyboardKey = "HKLM:\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters"
+$MouseKey    = "HKLM:\SYSTEM\CurrentControlSet\Services\mouclass\Parameters"
+
+# User-supplied RAM table. These values are kept unchanged.
+$RamValues = [ordered]@{
+    "Default" = 0x380000
+    "4 GB"    = 0x400000
+    "6 GB"    = 0x600000
+    "8 GB"    = 0x800000
+    "12 GB"   = 0xC00000
+    "16 GB"   = 0x1000000
+    "24 GB"   = 0x1800000
+    "32 GB"   = 0x2000000
+    "64 GB"   = 0x4000000
 }
 
-function Set-Dword($Path,$Name,[int]$Value) {
-    New-Item -Path $Path -Force | Out-Null
-    New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
-    Write-Log "DWORD $Path\$Name=$Value"
+# Safe-by-default app list. Windows services are deliberately not removed.
+$DebloatApps = @(
+    "Microsoft.BingNews",
+    "Microsoft.BingWeather",
+    "Microsoft.GetHelp",
+    "Microsoft.Getstarted",
+    "Microsoft.MicrosoftOfficeHub",
+    "Microsoft.MicrosoftSolitaireCollection",
+    "Microsoft.People",
+    "Microsoft.Todos",
+    "Microsoft.WindowsFeedbackHub",
+    "Microsoft.WindowsMaps",
+    "Microsoft.Xbox.TCUI",
+    "Microsoft.XboxGamingOverlay",
+    "Microsoft.XboxIdentityProvider",
+    "Microsoft.XboxSpeechToTextOverlay",
+    "Microsoft.ZuneMusic",
+    "Microsoft.ZuneVideo"
+)
+
+function Ensure-Dir([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+    return (Test-Path -LiteralPath $Path)
 }
 
-function Set-String($Path,$Name,[string]$Value) {
-    New-Item -Path $Path -Force | Out-Null
-    New-ItemProperty -Path $Path -Name $Name -PropertyType String -Value $Value -Force | Out-Null
-    Write-Log "STRING $Path\$Name=$Value"
-}
+Ensure-Dir $Root | Out-Null
+Ensure-Dir $BackupRoot | Out-Null
 
-function Backup-Reg($Key,$File) {
-    & reg.exe export $Key $File /y | Out-Null
-}
-
-function New-Backup($Profile="MANUAL") {
-    $dir = Join-Path $BackupRoot ("{0}_{1}" -f (Get-Date -Format "yyyyMMdd_HHmmss"),$Profile)
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-
-    Backup-Reg "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer" (Join-Path $dir "Explorer.reg")
-    Backup-Reg "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" (Join-Path $dir "GameDVR.reg")
-    Backup-Reg "HKCU\Software\Microsoft\GameBar" (Join-Path $dir "GameBar.reg")
-    Backup-Reg "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" (Join-Path $dir "SystemProfile.reg")
-
-    try { powercfg /getactivescheme | Out-File (Join-Path $dir "PowerPlan.txt") -Encoding utf8 } catch {}
+function Write-Log([string]$Text) {
     try {
-        Get-CimInstance Win32_Service |
-            Select Name,StartMode,State |
-            Export-Csv (Join-Path $dir "Services.csv") -NoTypeInformation -Encoding UTF8
+        Add-Content -LiteralPath $LogFile -Value ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Text)
     } catch {}
-
-    Set-Content (Join-Path $dir "INFO.txt") @"
-LARZONE V3.2.3 BACKUP
-Profile : $Profile
-Date    : $(Get-Date)
-PC      : $env:COMPUTERNAME
-"@ -Encoding UTF8
-
-    Write-Log "BACKUP $dir"
-    return $dir
 }
 
-function Restore-Backup($Dir) {
-    if (-not (Test-Path $Dir)) { return }
-    Get-ChildItem $Dir -Filter "*.reg" | ForEach-Object {
-        & reg.exe import $_.FullName | Out-Null
-    }
-    Write-Log "RESTORE $Dir"
+function Show-Message([string]$Message, [string]$Title = $AppName,
+    [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information) {
+    [void][System.Windows.Forms.MessageBox]::Show($Message, $Title,
+        [System.Windows.Forms.MessageBoxButtons]::OK, $Icon)
 }
 
-# ---------- Tweaks ----------
-function Apply-Normal {
-    New-Backup "NORMAL"
-    Set-Dword "HKCU:\System\GameConfigStore" "GameDVR_Enabled" 0
-    Set-Dword "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" 0
-    Set-Dword "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AudioCaptureEnabled" 0
-    Set-Dword "HKCU:\SOFTWARE\Microsoft\GameBar" "ShowStartupPanel" 0
-    Write-Log "NORMAL applied"
-}
-
-function Apply-High {
-    Apply-Normal
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting" 2
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency" 0
-    Set-Dword "HKCU:\Software\Microsoft\GameBar" "AllowAutoGameMode" 1
-    Set-Dword "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled" 1
-    Set-Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" "SystemResponsiveness" 10
-    Set-Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "GPU Priority" 8
-    Set-Dword "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" "Priority" 6
-    New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Force | Out-Null
-    New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -Name "Scheduling Category" -PropertyType String -Value "High" -Force | Out-Null
-    Write-Log "HIGH applied"
-}
-
-function Apply-Input {
-    New-Backup "INPUT"
-    Set-Dword "HKCU:\Control Panel\Mouse" "MouseSpeed" 0
-    Set-Dword "HKCU:\Control Panel\Mouse" "MouseThreshold1" 0
-    Set-Dword "HKCU:\Control Panel\Mouse" "MouseThreshold2" 0
-    Write-Log "INPUT applied"
-}
-
-function Apply-UI {
-    New-Backup "WINDOWS_UI"
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency" 0
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAnimations" 0
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SystemPaneSuggestionsEnabled" 0
-    Write-Log "WINDOWS UI applied"
-}
-
-function Apply-Privacy {
-    New-Backup "PRIVACY"
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled" 0
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338388Enabled" 0
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353694Enabled" 0
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353696Enabled" 0
-    Write-Log "PRIVACY applied"
-}
-
-function Apply-Background {
-    New-Backup "BACKGROUND"
-    Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled" 1
-    Write-Log "BACKGROUND applied"
-}
-
-function Apply-Power {
-    New-Backup "POWER"
-    powercfg /setactive SCHEME_MAX | Out-Null
-    Write-Log "HIGH PERFORMANCE power plan selected"
-}
-
-function Apply-Gaming {
-    Apply-Normal
-    Set-Dword "HKCU:\Software\Microsoft\GameBar" "AllowAutoGameMode" 1
-    Set-Dword "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled" 1
-}
-
-
-# ---------- Custom / Debloat Tweaks ----------
-# Each tweak is independent so CUSTOM mode can apply only what the user selected.
-function Apply-CustomTweak($Id) {
-    switch ($Id) {
-        "Telemetry" {
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo" "Enabled" 0
-        }
-        "ActivityHistory" {
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableActivityFeed" 0
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "PublishUserActivities" 0
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "UploadUserActivities" 0
-        }
-        "ConsumerFeatures" {
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures" 1
-        }
-        "Suggestions" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SystemPaneSuggestionsEnabled" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-338388Enabled" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353694Enabled" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SubscribedContent-353696Enabled" 0
-        }
-        "Widgets" {
-            Set-Dword "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" "AllowNewsAndInterests" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarDa" 0
-        }
-        "BackgroundApps" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" "GlobalUserDisabled" 1
-        }
-        "SearchHighlights" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings" "IsDynamicSearchBoxEnabled" 0
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings" "IsCloudSearchEnabled" 0
-        }
-        "Transparency" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" "EnableTransparency" 0
-        }
-        "Animations" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAnimations" 0
-        }
-        "VisualEffects" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting" 2
-        }
-        "ExplorerThisPC" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "LaunchTo" 1
-        }
-        "GameDVR" {
-            Set-Dword "HKCU:\System\GameConfigStore" "GameDVR_Enabled" 0
-            Set-Dword "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" 0
-            Set-Dword "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" "AudioCaptureEnabled" 0
-        }
-        "GameMode" {
-            Set-Dword "HKCU:\Software\Microsoft\GameBar" "AllowAutoGameMode" 1
-            Set-Dword "HKCU:\Software\Microsoft\GameBar" "AutoGameModeEnabled" 1
-        }
-        "InputMouse" {
-            Set-Dword "HKCU:\Control Panel\Mouse" "MouseSpeed" 0
-            Set-Dword "HKCU:\Control Panel\Mouse" "MouseThreshold1" 0
-            Set-Dword "HKCU:\Control Panel\Mouse" "MouseThreshold2" 0
-        }
-        "HighPerformance" {
-            powercfg /setactive SCHEME_MAX | Out-Null
-            Write-Log "CUSTOM high performance power plan selected"
-        }
-        "Copilot" {
-            Set-Dword "HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot" 1
-        }
-        "TailoredExperiences" {
-            Set-Dword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy" "TailoredExperiencesWithDiagnosticDataEnabled" 0
-        }
-        "Location" {
-            Set-String "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location" "Value" "Deny"
-        }
-        "FastStartup" {
-            Set-Dword "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" "HiberbootEnabled" 1
-        }
+function Get-DWord([string]$Path, [string]$Name) {
+    try {
+        return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name
+    } catch {
+        return $null
     }
 }
 
-$Apps = [ordered]@{
-    "Feedback Hub" = "Microsoft.WindowsFeedbackHub"
-    "Get Help" = "Microsoft.GetHelp"
-    "Get Started" = "Microsoft.Getstarted"
-    "Solitaire" = "Microsoft.MicrosoftSolitaireCollection"
-    "People" = "Microsoft.People"
-    "Weather" = "Microsoft.BingWeather"
-    "News" = "Microsoft.BingNews"
-    "Maps" = "Microsoft.WindowsMaps"
-    "Phone Link" = "Microsoft.YourPhone"
-    "Xbox" = "Microsoft.XboxApp"
-    "Xbox Game Bar" = "Microsoft.XboxGamingOverlay"
-    "Xbox Identity" = "Microsoft.XboxIdentityProvider"
-    "Music" = "Microsoft.ZuneMusic"
-    "Movies & TV" = "Microsoft.ZuneVideo"
-    "3D Viewer" = "Microsoft.Microsoft3DViewer"
-    "Mixed Reality" = "Microsoft.MixedReality.Portal"
+function Set-DWord([string]$Path, [string]$Name, [uint32]$Value) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
+    New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
 }
 
-function Remove-App($Name) {
-    $pkg = $Apps[$Name]
-    if (-not $pkg) { return }
-    Get-AppxPackage -AllUsers -Name $pkg | ForEach-Object {
+function Format-Hex($Value) {
+    if ($null -eq $Value) { return "NOT SET" }
+    return ("0x{0:X8}" -f [uint32]$Value)
+}
+
+function Export-KeyChecked([string]$Key, [string]$File, [string]$Label) {
+    if (-not (Test-Path -LiteralPath $Key)) {
+        Write-Log ("{0}: registry key not present; skipped." -f $Label)
+        return [pscustomobject]@{ Label=$Label; Success=$true; Skipped=$true; ExitCode=0 }
+    }
+
+    & reg.exe export $Key $File /y *> $null
+    $code = $LASTEXITCODE
+    $ok = ($code -eq 0 -and (Test-Path -LiteralPath $File))
+    if ($ok) {
+        Write-Log ("{0}: exported successfully." -f $Label)
+    } else {
+        Write-Log ("{0}: export failed with exit code {1}." -f $Label, $code)
+    }
+    return [pscustomobject]@{ Label=$Label; Success=$ok; Skipped=$false; ExitCode=$code }
+}
+
+function New-LarzoneBackup {
+    Ensure-Dir $BackupRoot | Out-Null
+    $folder = Join-Path $BackupRoot (Get-Date -Format "yyyyMMdd_HHmmss")
+    Ensure-Dir $folder | Out-Null
+
+    $results = @(
+        (Export-KeyChecked "HKLM\SYSTEM\CurrentControlSet\Control" (Join-Path $folder "Control.reg") "Control"),
+        (Export-KeyChecked "HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" (Join-Path $folder "Keyboard.reg") "Keyboard"),
+        (Export-KeyChecked "HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" (Join-Path $folder "Mouse.reg") "Mouse")
+    )
+
+    $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $folder "BackupReport.json") -Encoding UTF8
+
+    $failed = @($results | Where-Object { -not $_.Success })
+    if ($failed.Count -gt 0) {
+        Show-Message ("Backup ไม่สมบูรณ์:`r`n`r`n" +
+            (($failed | ForEach-Object { "{0} : exit {1}" -f $_.Label, $_.ExitCode }) -join "`r`n")) `
+            "$AppName // BACKUP" ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $null
+    }
+
+    Write-Log ("Backup created: {0}" -f $folder)
+    return $folder
+}
+
+function Restore-LarzoneBackup([string]$Folder) {
+    if (-not (Test-Path -LiteralPath $Folder)) {
+        Show-Message "ไม่พบโฟลเดอร์ Backup" "$AppName // RESTORE" ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $false
+    }
+
+    $files = @(
+        (Join-Path $Folder "Control.reg"),
+        (Join-Path $Folder "Keyboard.reg"),
+        (Join-Path $Folder "Mouse.reg")
+    )
+
+    $failed = @()
+    foreach ($file in $files) {
+        if (Test-Path -LiteralPath $file) {
+            & reg.exe import $file *> $null
+            if ($LASTEXITCODE -ne 0) { $failed += [IO.Path]::GetFileName($file) }
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Show-Message ("Restore ไม่สำเร็จ:`r`n" + ($failed -join "`r`n")) `
+            "$AppName // RESTORE" ([System.Windows.Forms.MessageBoxIcon]::Error)
+        return $false
+    }
+
+    Show-Message ("Restore สำเร็จ`r`n`r`n{0}`r`n`r`nแนะนำให้ Restart Windows" -f $Folder) "$AppName // RESTORE"
+    Write-Log ("Backup restored: {0}" -f $Folder)
+    return $true
+}
+
+function Get-SystemInfo {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+        $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | Select-Object -First 1
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $total = [math]::Round($cs.TotalPhysicalMemory / 1GB, 1)
+        $free = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+        return [pscustomobject]@{
+            CPU = $cpu.Name
+            GPU = $gpu.Name
+            RAM = $total
+            FreeRAM = $free
+            Windows = $os.Caption
+            Build = $os.BuildNumber
+        }
+    } catch {
+        return [pscustomobject]@{ CPU="Unknown";GPU="Unknown";RAM=0;FreeRAM=0;Windows="Unknown";Build="Unknown" }
+    }
+}
+
+function Get-StatusText {
+    $s = Get-SystemInfo
+    @(
+        "SYSTEM INFORMATION",
+        "────────────────────────────",
+        ("CPU       : {0}" -f $s.CPU),
+        ("GPU       : {0}" -f $s.GPU),
+        ("RAM       : {0} GB" -f $s.RAM),
+        ("Free RAM  : {0} GB" -f $s.FreeRAM),
+        ("Windows   : {0}" -f $s.Windows),
+        ("Build     : {0}" -f $s.Build),
+        "",
+        "CURRENT VALUES",
+        "────────────────────────────",
+        ("Win32     : {0}" -f (Format-Hex (Get-DWord $ControlKey "Win32PrioritySeparation"))),
+        ("Keyboard  : {0}" -f (Format-Hex (Get-DWord $KeyboardKey "KeyboardDataQueueSize"))),
+        ("Mouse     : {0}" -f (Format-Hex (Get-DWord $MouseKey "MouseDataQueueSize"))),
+        ("RAM       : {0}" -f (Format-Hex (Get-DWord $ControlKey "SvcHostSplitThresholdInKB"))),
+        "",
+        "RULES",
+        "────────────────────────────",
+        "NORMAL / HIGH : ไม่แตะ Win32 / Keyboard / Mouse / RAM",
+        "CUSTOM/DEBLOAT: เลือกเปิด/ปิดเองได้",
+        "SYSTEM        : ค่า Win32 / Keyboard / Mouse / RAM",
+        "SERVICES      : ไม่ลบ/ไม่ปิดแบบเหมา"
+    ) -join "`r`n"
+}
+
+function Remove-SelectedApps([array]$Selected) {
+    $backup = New-LarzoneBackup
+    if (-not $backup) { return }
+
+    $done = 0
+    foreach ($name in $Selected) {
         try {
-            Remove-AppxPackage -Package $_.PackageFullName -AllUsers
-            Write-Log "REMOVED APP $Name"
+            $packages = Get-AppxPackage -AllUsers -Name $name -ErrorAction SilentlyContinue
+            foreach ($package in $packages) {
+                Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+                $done++
+            }
         } catch {}
     }
+
+    Show-Message ("Debloat เสร็จแล้ว`r`n`r`nลบ App ได้: {0}`r`n`r`nBackup:`r`n{1}" -f $done, $backup) "$AppName // DEBLOAT"
 }
 
-function Apply-Debloat($Selected) {
-    New-Backup "DEBLOAT"
-    foreach ($n in $Selected) { Remove-App $n }
+function Apply-SafeTweaks([hashtable]$Options) {
+    $backup = New-LarzoneBackup
+    if (-not $backup) { return }
+
+    # Only conservative, reversible user-facing toggles are handled here.
+    # Critical services, Defender, Windows Update, network stack and input drivers are untouched.
+
+    if ($Options.Suggestions) {
+        try {
+            $p = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+            Ensure-Dir $p | Out-Null
+            Set-DWord $p "SubscribedContent-338388Enabled" 0
+            Set-DWord $p "SubscribedContent-338389Enabled" 0
+            Set-DWord $p "SubscribedContent-310093Enabled" 0
+            Set-DWord $p "SubscribedContent-353694Enabled" 0
+        } catch {}
+    }
+
+    if ($Options.Telemetry) {
+        try {
+            $p = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy"
+            Ensure-Dir $p | Out-Null
+            Set-DWord $p "TailoredExperiencesWithDiagnosticDataEnabled" 0
+        } catch {}
+    }
+
+    if ($Options.BackgroundApps) {
+        try {
+            $p = "HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications"
+            Ensure-Dir $p | Out-Null
+            Set-DWord $p "GlobalUserDisabled" 1
+        } catch {}
+    }
+
+    Show-Message ("Tweaks ที่เลือกถูก Apply แล้ว`r`n`r`nBackup:`r`n{0}" -f $backup) "$AppName // CUSTOM"
 }
 
-# ---------- Common UI ----------
-$font = New-Object System.Drawing.Font("Segoe UI",11)
-$fontTitle = New-Object System.Drawing.Font("Segoe UI Semibold",24)
-$fontButton = New-Object System.Drawing.Font("Segoe UI Semibold",13)
-
-function Make-Button($Form,$Text,$X,$Y,$W,$H,$Action) {
+function New-Button([string]$Text,[int]$X,[int]$Y,[int]$W,[int]$H,[int]$FontSize=11) {
     $b = New-Object System.Windows.Forms.Button
     $b.Text = $Text
-    $b.Font = $fontButton
-    $b.Size = New-Object System.Drawing.Size($W,$H)
     $b.Location = New-Object System.Drawing.Point($X,$Y)
-    $b.BackColor = [System.Drawing.Color]::FromArgb(28,55,90)
+    $b.Size = New-Object System.Drawing.Size($W,$H)
+    $b.BackColor = [System.Drawing.Color]::FromArgb(17,23,35)
     $b.ForeColor = [System.Drawing.Color]::White
-    $b.FlatStyle = "Flat"
-    $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(70,160,240)
-    $b.Add_Click($Action)
-    $Form.Controls.Add($b)
+    $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $b.Font = New-Object System.Drawing.Font("Segoe UI",$FontSize,[System.Drawing.FontStyle]::Bold)
+    $b.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(45,90,150)
     return $b
 }
 
-function New-SimpleWindow($Title,$Width=760,$Height=560) {
+function New-Label([string]$Text,[int]$X,[int]$Y,[int]$W,[int]$H,[int]$Size=10) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $Text
+    $l.Location = New-Object System.Drawing.Point($X,$Y)
+    $l.Size = New-Object System.Drawing.Size($W,$H)
+    $l.ForeColor = [System.Drawing.Color]::White
+    $l.Font = New-Object System.Drawing.Font("Segoe UI",$Size)
+    return $l
+}
+
+function New-BaseForm([string]$Title,[int]$W=1180,[int]$H=760) {
     $f = New-Object System.Windows.Forms.Form
     $f.Text = $Title
+    $f.Size = New-Object System.Drawing.Size($W,$H)
     $f.StartPosition = "CenterScreen"
-    $f.ClientSize = New-Object System.Drawing.Size($Width,$Height)
-    $f.BackColor = [System.Drawing.Color]::FromArgb(10,15,25)
+    $f.BackColor = [System.Drawing.Color]::FromArgb(8,11,18)
     $f.ForeColor = [System.Drawing.Color]::White
     $f.FormBorderStyle = "FixedSingle"
     $f.MaximizeBox = $false
-    $f.MinimizeBox = $true
     return $f
 }
 
-function Add-Title($Form,$Text) {
-    $l = New-Object System.Windows.Forms.Label
-    $l.Text = $Text
-    $l.Font = $fontTitle
-    $l.ForeColor = [System.Drawing.Color]::FromArgb(65,185,255)
-    $l.AutoSize = $true
-    $l.Location = New-Object System.Drawing.Point(30,25)
-    $Form.Controls.Add($l)
+function Add-Header($Form,[string]$Title,[string]$SubTitle) {
+    $Form.Controls.Add((New-Label $Title 30 20 900 50 28))
+    $Form.Controls.Add((New-Label $SubTitle 34 68 900 30 10))
 }
 
-function Info($Text) {
-    [System.Windows.Forms.MessageBox]::Show(
-        $Text,"LARZONE V3.2.3",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Information
-    ) | Out-Null
-}
+function Show-MainMenu {
+    $f = New-BaseForm "$AppName $Version" 1180 760
+    Add-Header $f "LARZONE // DEBLOAT" "WINDOWS 11 OPTIMIZATION TOOL FOR GAMING"
 
-function Confirm($Text) {
-    return (
-        [System.Windows.Forms.MessageBox]::Show(
-            $Text,"ยืนยันการปรับแต่ง",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning
-        ) -eq [System.Windows.Forms.DialogResult]::Yes
-    )
-}
+    $bCustom = New-Button "CUSTOM / DEBLOAT" 35 120 620 85 14
+    $bGame   = New-Button "GAMING MODE"      35 220 620 85 14
+    $bSystem = New-Button "SYSTEM"            35 320 620 85 14
+    $bBackup = New-Button "BACKUP / RESTORE"  35 420 620 85 14
+    $bNote   = New-Button "SYSTEM NOTE"       35 520 620 85 14
+    $bExit   = New-Button "EXIT"              35 620 620 55 12
 
-# ---------- Simple Gaming ----------
-function Open-Gaming {
-    $f = New-SimpleWindow "LARZONE // GAMING MODE" 900 500
-    Add-Title $f "GAMING MODE"
+    $info = New-Object System.Windows.Forms.TextBox
+    $info.Multiline = $true
+    $info.ReadOnly = $true
+    $info.ScrollBars = "Vertical"
+    $info.Location = New-Object System.Drawing.Point(700,120)
+    $info.Size = New-Object System.Drawing.Size(430,555)
+    $info.BackColor = [System.Drawing.Color]::FromArgb(13,17,27)
+    $info.ForeColor = [System.Drawing.Color]::White
+    $info.Font = New-Object System.Drawing.Font("Consolas",10)
+    $info.Text = Get-StatusText
+    $f.Controls.Add($info)
 
-    $sub = New-Object System.Windows.Forms.Label
-    $sub.Text = "เลือกโปรไฟล์ได้อิสระ — NORMAL / HIGH / CUSTOM / DEBLOAT"
-    $sub.Font = $font
-    $sub.AutoSize = $true
-    $sub.Location = New-Object System.Drawing.Point(35,75)
-    $f.Controls.Add($sub)
+    $f.Controls.Add($bCustom);$f.Controls.Add($bGame);$f.Controls.Add($bSystem)
+    $f.Controls.Add($bBackup);$f.Controls.Add($bNote);$f.Controls.Add($bExit)
 
-    Make-Button $f "NORMAL" 35 125 195 100 {
-        if (Confirm "Apply NORMAL หรือไม่?") {
-            Apply-Normal
-            Info "NORMAL ใช้งานแล้ว"
-        }
-    } | Out-Null
-
-    Make-Button $f "HIGH" 245 125 195 100 {
-        if (Confirm "Apply HIGH หรือไม่?") {
-            Apply-High
-            Info "HIGH ใช้งานแล้ว"
-        }
-    } | Out-Null
-
-    Make-Button $f "CUSTOM" 455 125 195 100 {
-        Open-Custom
-    } | Out-Null
-
-    Make-Button $f "DEBLOAT" 665 125 195 100 {
-        Open-Debloat
-    } | Out-Null
-
-    $note = New-Object System.Windows.Forms.Label
-    $note.Text = "NORMAL / HIGH ไม่แตะ Win32 / Keyboard / Mouse / RAM`r`nCUSTOM และ DEBLOAT เลือกส่วนต่าง ๆ ได้เอง"
-    $note.Font = $font
-    $note.AutoSize = $true
-    $note.Location = New-Object System.Drawing.Point(40,275)
-    $f.Controls.Add($note)
-
-    Make-Button $f "BACK" 275 360 160 55 { $f.Close() } | Out-Null
-    Make-Button $f "CLOSE" 465 360 160 55 { $f.Close() } | Out-Null
+    $bCustom.Add_Click({ Show-CustomDebloat })
+    $bGame.Add_Click({ Show-GamingMode })
+    $bSystem.Add_Click({ Show-System })
+    $bBackup.Add_Click({ Show-BackupRestore })
+    $bNote.Add_Click({ Show-SystemNote })
+    $bExit.Add_Click({ $f.Close() })
 
     [void]$f.ShowDialog()
 }
 
-# ---------- Simple Custom ----------
-function Open-Custom {
-    $f = New-SimpleWindow "LARZONE // CUSTOM / DEBLOAT" 1000 760
-    Add-Title $f "CUSTOM / DEBLOAT"
+function Show-GamingMode {
+    $f = New-BaseForm "$AppName // GAMING MODE" 920 650
+    Add-Header $f "GAMING MODE" "เลือกโปรไฟล์สำหรับเล่นเกม — ไม่แก้ System Input/RAM ใน NORMAL/HIGH"
 
-    $sub = New-Object System.Windows.Forms.Label
-    $sub.Text = "DEFAULT = ค่าที่แนะนำ | CUSTOM = เลือกเปิด/ปิดแต่ละ tweak ได้อิสระ"
-    $sub.Font = $font
-    $sub.AutoSize = $true
-    $sub.Location = New-Object System.Drawing.Point(35,75)
-    $f.Controls.Add($sub)
+    $normal = New-Button "NORMAL" 40 125 390 105 15
+    $high   = New-Button "HIGH"   450 125 390 105 15
+    $custom = New-Button "CUSTOM / DEBLOAT" 40 250 800 110 15
+    $back   = New-Button "BACK" 40 500 800 60 12
 
-    $mode = New-Object System.Windows.Forms.Label
-    $mode.Text = "MODE : DEFAULT"
-    $mode.Font = $font
-    $mode.ForeColor = [System.Drawing.Color]::LightGreen
-    $mode.AutoSize = $true
-    $mode.Location = New-Object System.Drawing.Point(760,78)
-    $f.Controls.Add($mode)
+    $f.Controls.Add($normal);$f.Controls.Add($high);$f.Controls.Add($custom);$f.Controls.Add($back)
 
-    $items = [ordered]@{
-        "Privacy / Telemetry" = @(
-            @{Id="Telemetry"; Text="ปิด Telemetry / Diagnostic Data"},
-            @{Id="ActivityHistory"; Text="ปิด Activity History"},
-            @{Id="TailoredExperiences"; Text="ปิด Tailored Experiences / Personalization"},
-            @{Id="Location"; Text="ปิด Location Access"}
-        )
-        "Windows / Debloat" = @(
-            @{Id="ConsumerFeatures"; Text="ปิด Consumer Features / Suggested Apps"},
-            @{Id="Suggestions"; Text="ปิด Windows Suggestions / Recommended Content"},
-            @{Id="Widgets"; Text="ปิด Widgets"},
-            @{Id="BackgroundApps"; Text="ปิด Background Apps"}
-        )
-        "UI / Explorer" = @(
-            @{Id="SearchHighlights"; Text="ปิด Search Highlights / Cloud Search"},
-            @{Id="Transparency"; Text="ปิด Transparency"},
-            @{Id="Animations"; Text="ปิด Taskbar Animations"},
-            @{Id="VisualEffects"; Text="Best Performance Visual Effects"},
-            @{Id="ExplorerThisPC"; Text="Explorer เปิด This PC"}
-        )
-        "Gaming / Performance" = @(
-            @{Id="GameDVR"; Text="ปิด Game DVR / Captures"},
-            @{Id="GameMode"; Text="เปิด Game Mode"},
-            @{Id="InputMouse"; Text="Mouse Input / Acceleration Tweak"},
-            @{Id="HighPerformance"; Text="High Performance Power Plan"}
-        )
-        "Optional" = @(
-            @{Id="Copilot"; Text="ปิด Windows Copilot"},
-            @{Id="FastStartup"; Text="เปิด Fast Startup"}
-        )
-    }
-
-    $list = New-Object System.Windows.Forms.CheckedListBox
-    $list.Font = $font
-    $list.ForeColor = [System.Drawing.Color]::White
-    $list.BackColor = [System.Drawing.Color]::FromArgb(12,18,30)
-    $list.BorderStyle = "FixedSingle"
-    $list.CheckOnClick = $true
-    $list.Location = New-Object System.Drawing.Point(35,120)
-    $list.Size = New-Object System.Drawing.Size(930,480)
-    $f.Controls.Add($list)
-
-    $map = @{}
-    foreach ($cat in $items.Keys) {
-        [void]$list.Items.Add("===== $cat =====", $false)
-        $catIndex = $list.Items.Count - 1
-        $map[$catIndex] = $null
-
-        foreach ($it in $items[$cat]) {
-            $idx = $list.Items.Add("  " + $it.Text, $false)
-            $map[$idx] = $it.Id
-        }
-    }
-
-    # Default: balanced gaming/debloat profile; optional/destructive choices stay off.
-    $defaultIds = @(
-        "Telemetry","ActivityHistory","TailoredExperiences",
-        "ConsumerFeatures","Suggestions","Widgets","BackgroundApps",
-        "SearchHighlights","Transparency","Animations","VisualEffects",
-        "GameDVR","GameMode"
-    )
-    for ($i=0; $i -lt $list.Items.Count; $i++) {
-        if ($map[$i] -and ($defaultIds -contains $map[$i])) {
-            $list.SetItemChecked($i,$true)
-        }
-    }
-
-    Make-Button $f "DEFAULT" 35 620 170 60 {
-        for ($i=0; $i -lt $list.Items.Count; $i++) {
-            $list.SetItemChecked($i,$false)
-            if ($map[$i] -and ($defaultIds -contains $map[$i])) {
-                $list.SetItemChecked($i,$true)
-            }
-        }
-        $mode.Text = "MODE : DEFAULT"
-    } | Out-Null
-
-    Make-Button $f "CUSTOM" 225 620 170 60 {
-        $mode.Text = "MODE : CUSTOM"
-    } | Out-Null
-
-    Make-Button $f "ALL ON" 415 620 170 60 {
-        for ($i=0; $i -lt $list.Items.Count; $i++) {
-            if ($map[$i]) { $list.SetItemChecked($i,$true) }
-        }
-        $mode.Text = "MODE : CUSTOM / ALL"
-    } | Out-Null
-
-    Make-Button $f "ALL OFF" 605 620 170 60 {
-        for ($i=0; $i -lt $list.Items.Count; $i++) {
-            $list.SetItemChecked($i,$false)
-        }
-        $mode.Text = "MODE : CUSTOM / EMPTY"
-    } | Out-Null
-
-    Make-Button $f "APPLY SELECTED" 795 620 170 60 {
-        $selected = @()
-        for ($i=0; $i -lt $list.Items.Count; $i++) {
-            if ($map[$i] -and $list.GetItemChecked($i)) {
-                $selected += $map[$i]
-            }
-        }
-
-        if ($selected.Count -eq 0) {
-            Info "ยังไม่ได้เลือก tweak"
-            return
-        }
-
-        if (-not (Confirm ("จะ Apply $($selected.Count) tweak ที่เลือก`r`n`r`n" +
-            (($selected | ForEach-Object { "- " + $_ }) -join "`r`n") +
-            "`r`n`r`nจะสร้าง Backup ก่อนดำเนินการต่อ"))) {
-            return
-        }
-        foreach ($id in $selected) {
-            Apply-CustomTweak $id
-        }
-        Info "Apply CUSTOM / DEBLOAT เสร็จแล้ว"
-    } | Out-Null
-
+    $normal.Add_Click({
+        # NORMAL is intentionally conservative: no Win32/Input/RAM changes.
+        Show-Message "NORMAL ถูกเลือก`r`n`r`nไม่มีการเปลี่ยน Win32 / Keyboard / Mouse / RAM" "$AppName // NORMAL"
+    })
+    $high.Add_Click({
+        # HIGH is intentionally conservative: no Win32/Input/RAM changes.
+        Show-Message "HIGH ถูกเลือก`r`n`r`nไม่มีการเปลี่ยน Win32 / Keyboard / Mouse / RAM" "$AppName // HIGH"
+    })
+    $custom.Add_Click({ Show-CustomDebloat })
+    $back.Add_Click({ $f.Close() })
     [void]$f.ShowDialog()
 }
 
-# ---------- Debloat ----------
-function Open-Debloat {
-    $f = New-SimpleWindow "LARZONE // DEBLOAT" 980 720
-    Add-Title $f "DEBLOAT"
+function Show-CustomDebloat {
+    $f = New-BaseForm "$AppName // CUSTOM / DEBLOAT" 1180 760
+    Add-Header $f "CUSTOM / DEBLOAT" "Default + Custom — เลือกสิ่งที่ต้องการเปิด/ปิดเองได้"
 
-    $sub = New-Object System.Windows.Forms.Label
-    $sub.Text = "DEFAULT = รายการที่แนะนำ | CUSTOM = เลือกเปิด/ปิดแต่ละรายการเอง"
-    $sub.Font = $font
-    $sub.AutoSize = $true
-    $sub.Location = New-Object System.Drawing.Point(35,75)
-    $f.Controls.Add($sub)
+    $panel = New-Object System.Windows.Forms.Panel
+    $panel.Location = New-Object System.Drawing.Point(30,115)
+    $panel.Size = New-Object System.Drawing.Size(720,545)
+    $panel.AutoScroll = $true
+    $panel.BackColor = [System.Drawing.Color]::FromArgb(12,16,25)
+    $f.Controls.Add($panel)
 
-    $checks = @{}
-    $y = 155
-    $column = 0
+    $y = 15
+    $head = New-Label "DEFAULT DEBLOAT" 20 $y 600 35 15
+    $panel.Controls.Add($head);$y += 45
 
-    foreach ($name in $Apps.Keys) {
+    $checks = @()
+    foreach ($name in $DebloatApps) {
         $cb = New-Object System.Windows.Forms.CheckBox
         $cb.Text = $name
-        $cb.Font = $font
+        $cb.Location = New-Object System.Drawing.Point(25,$y)
+        $cb.Size = New-Object System.Drawing.Size(640,30)
         $cb.ForeColor = [System.Drawing.Color]::White
-        $cb.AutoSize = $true
-
-        if ($column -eq 0) {
-            $cb.Location = New-Object System.Drawing.Point(45,$y)
-        } else {
-            $cb.Location = New-Object System.Drawing.Point(430,$y)
-        }
-
-        $f.Controls.Add($cb)
-        $checks[$name] = $cb
-
-        if ($column -eq 1) {
-            $column = 0
-            $y += 38
-        } else {
-            $column = 1
-        }
+        $cb.Checked = $true
+        $cb.Font = New-Object System.Drawing.Font("Segoe UI",9)
+        $panel.Controls.Add($cb)
+        $checks += $cb
+        $y += 32
     }
 
-    # Recommended default: conservative removable consumer apps.
-    $defaultApps = @(
-        "Feedback Hub",
-        "Get Help",
-        "Get Started",
-        "Solitaire",
-        "People",
-        "Weather",
-        "News",
-        "Maps",
-        "3D Viewer"
-    )
+    $y += 12
+    $customTitle = New-Label "CUSTOM TWEAKS" 20 $y 600 35 15
+    $panel.Controls.Add($customTitle);$y += 42
 
-    foreach ($name in $defaultApps) {
-        if ($checks.ContainsKey($name)) { $checks[$name].Checked = $true }
-    }
+    $suggest = New-Object System.Windows.Forms.CheckBox
+    $suggest.Text = "ปิด Windows Suggestions / Content Delivery"
+    $suggest.Location = New-Object System.Drawing.Point(25,$y);$suggest.Size = New-Object System.Drawing.Size(640,30)
+    $suggest.ForeColor = [System.Drawing.Color]::White;$suggest.Checked = $false;$panel.Controls.Add($suggest);$y+=32
 
-    Make-Button $f "DEFAULT" 45 500 180 60 {
-        foreach ($c in $checks.Values) { $c.Checked = $false }
-        foreach ($name in $defaultApps) {
-            if ($checks.ContainsKey($name)) { $checks[$name].Checked = $true }
+    $telemetry = New-Object System.Windows.Forms.CheckBox
+    $telemetry.Text = "ลด Tailored Experiences / Diagnostic personalization"
+    $telemetry.Location = New-Object System.Drawing.Point(25,$y);$telemetry.Size = New-Object System.Drawing.Size(640,30)
+    $telemetry.ForeColor = [System.Drawing.Color]::White;$telemetry.Checked = $false;$panel.Controls.Add($telemetry);$y+=32
+
+    $background = New-Object System.Windows.Forms.CheckBox
+    $background.Text = "ปิด Background Apps สำหรับ user"
+    $background.Location = New-Object System.Drawing.Point(25,$y);$background.Size = New-Object System.Drawing.Size(640,30)
+    $background.ForeColor = [System.Drawing.Color]::White;$background.Checked = $false;$panel.Controls.Add($background)
+
+    $right = New-Object System.Windows.Forms.Panel
+    $right.Location = New-Object System.Drawing.Point(780,115)
+    $right.Size = New-Object System.Drawing.Size(350,545)
+    $right.BackColor = [System.Drawing.Color]::FromArgb(13,17,27)
+    $f.Controls.Add($right)
+
+    $right.Controls.Add((New-Label "CUSTOM RULES" 20 20 300 35 15))
+    $rules = New-Label (
+        "DEFAULT`r`n" +
+        "• เลือก App ที่ต้องการ Debloat`r`n" +
+        "• ไม่แตะ Critical Services`r`n" +
+        "• ไม่แตะ Defender / Update`r`n`r`n" +
+        "CUSTOM`r`n" +
+        "• เปิด/ปิด tweak เอง`r`n" +
+        "• Backup ก่อน Apply`r`n`r`n" +
+        "GAMING MODE`r`n" +
+        "• NORMAL / HIGH ปลอดภัย`r`n" +
+        "• CUSTOM/DEBLOAT เปิดหน้านี้"
+    ) 20 65 310 250 10
+    $right.Controls.Add($rules)
+
+    $apply = New-Button "APPLY SELECTED" 20 350 310 65 12
+    $back = New-Button "BACK" 20 430 310 55 11
+    $right.Controls.Add($apply);$right.Controls.Add($back)
+
+    $apply.Add_Click({
+        $selected = @($checks | Where-Object { $_.Checked } | ForEach-Object { $_.Text })
+        $opts = @{
+            Suggestions = $suggest.Checked
+            Telemetry = $telemetry.Checked
+            BackgroundApps = $background.Checked
         }
-        $mode.Text = "MODE : DEFAULT"
-    } | Out-Null
 
-    Make-Button $f "CUSTOM" 245 500 180 60 {
-        $mode.Text = "MODE : CUSTOM"
-    } | Out-Null
-
-    Make-Button $f "ALL ON" 445 500 160 60 {
-        foreach ($c in $checks.Values) { $c.Checked = $true }
-        $mode.Text = "MODE : CUSTOM / ALL"
-    } | Out-Null
-
-    Make-Button $f "ALL OFF" 625 500 160 60 {
-        foreach ($c in $checks.Values) { $c.Checked = $false }
-        $mode.Text = "MODE : CUSTOM / EMPTY"
-    } | Out-Null
-
-    $mode = New-Object System.Windows.Forms.Label
-    $mode.Text = "MODE : DEFAULT"
-    $mode.Font = $font
-    $mode.ForeColor = [System.Drawing.Color]::LightGreen
-    $mode.AutoSize = $true
-    $mode.Location = New-Object System.Drawing.Point(800,520)
-    $f.Controls.Add($mode)
-
-    Make-Button $f "REMOVE SELECTED" 45 590 360 65 {
-        $selected = @(
-            $checks.GetEnumerator() |
-            Where-Object { $_.Value.Checked } |
-            ForEach-Object Key
+        $answer = [System.Windows.Forms.MessageBox]::Show(
+            "จะ Apply รายการที่เลือกและสร้าง Backup ก่อน`r`n`r`nApp: $($selected.Count) รายการ`r`nต่อหรือไม่?",
+            "$AppName // APPLY",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Question
         )
-        if ($selected.Count -eq 0) {
-            Info "ยังไม่ได้เลือกแอป"
-            return
-        }
-        if (Confirm ("จะลบ $($selected.Count) รายการ:`r`n" + ($selected -join ", ") + "`r`n`r`nดำเนินการต่อหรือไม่?")) {
-            Apply-Debloat $selected
-            Info "Debloat เสร็จแล้ว"
-        }
-    } | Out-Null
+        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
 
-    Make-Button $f "BACK" 425 590 170 65 { $f.Close() } | Out-Null
-    Make-Button $f "CLOSE" 615 590 170 65 { $f.Close() } | Out-Null
-
+        if ($selected.Count -gt 0) {
+            $appNames = @()
+            foreach ($cb in $checks) {
+                if ($cb.Checked) { $appNames += $DebloatApps[[array]::IndexOf($checks,$cb)] }
+            }
+            $b = New-LarzoneBackup
+            if (-not $b) { return }
+            foreach ($n in $appNames) {
+                try {
+                    $packages = Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue
+                    foreach ($pkg in $packages) {
+                        Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+                    }
+                } catch {}
+            }
+            # Apply custom tweaks using the same backup only after the app operation.
+            if ($opts.Suggestions -or $opts.Telemetry -or $opts.BackgroundApps) {
+                if ($opts.Suggestions) {
+                    try {
+                        $p="HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+                        Ensure-Dir $p | Out-Null
+                        Set-DWord $p "SubscribedContent-338388Enabled" 0
+                        Set-DWord $p "SubscribedContent-338389Enabled" 0
+                        Set-DWord $p "SubscribedContent-310093Enabled" 0
+                        Set-DWord $p "SubscribedContent-353694Enabled" 0
+                    } catch {}
+                }
+                if ($opts.Telemetry) {
+                    try {
+                        $p="HKCU:\Software\Microsoft\Windows\CurrentVersion\Privacy"
+                        Ensure-Dir $p | Out-Null
+                        Set-DWord $p "TailoredExperiencesWithDiagnosticDataEnabled" 0
+                    } catch {}
+                }
+                if ($opts.BackgroundApps) {
+                    try {
+                        $p="HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications"
+                        Ensure-Dir $p | Out-Null
+                        Set-DWord $p "GlobalUserDisabled" 1
+                    } catch {}
+                }
+            }
+            Show-Message ("Apply สำเร็จ`r`n`r`nBackup:`r`n{0}" -f $b) "$AppName // CUSTOM"
+        } else {
+            Apply-SafeTweaks $opts
+        }
+    })
+    $back.Add_Click({ $f.Close() })
     [void]$f.ShowDialog()
 }
 
-# ---------- System ----------
-function Open-System {
-    $f = New-SimpleWindow "LARZONE // SYSTEM" 760 540
-    Add-Title $f "SYSTEM"
+function Show-System {
+    $f = New-BaseForm "$AppName // SYSTEM" 980 690
+    Add-Header $f "SYSTEM" "Win32 / Keyboard / Mouse / RAM — มี REFRESH ค่า"
 
-    $info = Get-CimInstance Win32_ComputerSystem
-    $os = Get-CimInstance Win32_OperatingSystem
-    $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
-    $gpu = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name
-    $ram = [math]::Round($info.TotalPhysicalMemory/1GB,1)
+    $grid = New-Object System.Windows.Forms.Panel
+    $grid.Location = New-Object System.Drawing.Point(30,115)
+    $grid.Size = New-Object System.Drawing.Size(900,390)
+    $grid.BackColor = [System.Drawing.Color]::FromArgb(13,17,27)
+    $f.Controls.Add($grid)
 
-    $l = New-Object System.Windows.Forms.Label
-    $l.Text = "CPU : $cpu`r`nGPU : $gpu`r`nRAM : $ram GB`r`nWindows : $($os.Caption)`r`nBuild : $($os.BuildNumber)"
-    $l.Font = $font
-    $l.AutoSize = $true
-    $l.Location = New-Object System.Drawing.Point(40,95)
-    $f.Controls.Add($l)
+    $labels = @(
+        "Win32 Priority Separation",
+        "Keyboard Queue Size",
+        "Mouse Queue Size",
+        "RAM Profile"
+    )
+    $fields = @()
+    for ($i=0;$i -lt 4;$i++) {
+        $grid.Controls.Add((New-Label $labels[$i] 30 (35+$i*75) 300 35 11))
+        $tb = New-Object System.Windows.Forms.TextBox
+        $tb.Location = New-Object System.Drawing.Point(350,(30+$i*75))
+        $tb.Size = New-Object System.Drawing.Size(420,35)
+        $tb.BackColor = [System.Drawing.Color]::FromArgb(20,25,35)
+        $tb.ForeColor = [System.Drawing.Color]::White
+        $tb.Font = New-Object System.Drawing.Font("Consolas",11)
+        $grid.Controls.Add($tb);$fields += $tb
+    }
 
-    Make-Button $f "KEYBOARD / MOUSE" 40 270 250 65 {
-        Apply-Input
-        Info "Input profile ถูก Apply แล้ว"
-    } | Out-Null
+    function Refresh-SystemFields {
+        $fields[0].Text = Format-Hex (Get-DWord $ControlKey "Win32PrioritySeparation")
+        $fields[1].Text = Format-Hex (Get-DWord $KeyboardKey "KeyboardDataQueueSize")
+        $fields[2].Text = Format-Hex (Get-DWord $MouseKey "MouseDataQueueSize")
+        $fields[3].Text = Format-Hex (Get-DWord $ControlKey "SvcHostSplitThresholdInKB")
+    }
 
-    Make-Button $f "RAM PROFILE" 310 270 180 65 {
-        Info "RAM profile ใช้เป็นข้อมูล/โปรไฟล์ของเครื่องมือ`r`nไม่บังคับล็อก RAM หรือแบ่ง RAM ปลอมให้ GPU"
-    } | Out-Null
+    $refresh = New-Button "REFRESH VALUES" 30 535 280 60 12
+    $apply = New-Button "APPLY SYSTEM CUSTOM" 330 535 280 60 12
+    $back = New-Button "BACK" 630 535 300 60 12
+    $f.Controls.Add($refresh);$f.Controls.Add($apply);$f.Controls.Add($back)
 
-    Make-Button $f "REFRESH" 510 270 170 65 {
-        $l.Text = "CPU : $((Get-CimInstance Win32_Processor | Select -First 1).Name)`r`nGPU : $((Get-CimInstance Win32_VideoController | Select -First 1).Name)`r`nRAM : $([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)) GB`r`nWindows : $((Get-CimInstance Win32_OperatingSystem).Caption)`r`nBuild : $((Get-CimInstance Win32_OperatingSystem).BuildNumber)"
-    } | Out-Null
+    $refresh.Add_Click({ Refresh-SystemFields })
+    $back.Add_Click({ $f.Close() })
 
-    Make-Button $f "ปิด" 280 400 200 55 { $f.Close() } | Out-Null
+    $apply.Add_Click({
+        $b = New-LarzoneBackup
+        if (-not $b) { return }
+        try {
+            $hex = $fields[0].Text.Trim().Replace("0x","")
+            if ($hex -notmatch "^[0-9A-Fa-f]{1,8}$") { throw "Win32 ต้องเป็น HEX" }
+            [uint32]$w = [Convert]::ToUInt32($hex,16)
+
+            [int]$k = 0
+            [int]$m = 0
+            $kText = $fields[1].Text.Trim()
+            $mText = $fields[2].Text.Trim()
+
+            if ($kText -match "^0x") { $k=[Convert]::ToInt32($kText.Replace("0x",""),16) }
+            elseif (-not [int]::TryParse($kText,[ref]$k)) { throw "Keyboard ต้องเป็นตัวเลขหรือ HEX" }
+
+            if ($mText -match "^0x") { $m=[Convert]::ToInt32($mText.Replace("0x",""),16) }
+            elseif (-not [int]::TryParse($mText,[ref]$m)) { throw "Mouse ต้องเป็นตัวเลขหรือ HEX" }
+
+            if ($k -lt 1 -or $k -gt 255) { throw "Keyboard ต้องอยู่ 1-255" }
+            if ($m -lt 1 -or $m -gt 255) { throw "Mouse ต้องอยู่ 1-255" }
+
+            Set-DWord $ControlKey "Win32PrioritySeparation" $w
+            Set-DWord $KeyboardKey "KeyboardDataQueueSize" ([uint32]$k)
+            Set-DWord $MouseKey "MouseDataQueueSize" ([uint32]$m)
+
+            # RAM is shown separately and is not written from this button.
+            Show-Message ("System Custom สำเร็จ`r`n`r`nRAM ไม่ถูกเปลี่ยนจากปุ่มนี้`r`n`r`nBackup:`r`n{0}" -f $b) "$AppName // SYSTEM"
+            Refresh-SystemFields
+        } catch {
+            Show-Message $_.Exception.Message "$AppName // SYSTEM" ([System.Windows.Forms.MessageBoxIcon]::Error)
+        }
+    })
+
+    Refresh-SystemFields
     [void]$f.ShowDialog()
 }
 
-# ---------- Backup ----------
-function Open-Backup {
-    $f = New-SimpleWindow "LARZONE // BACKUP / RESTORE" 850 600
-    Add-Title $f "BACKUP / RESTORE"
+function Show-RamProfile {
+    $f = New-BaseForm "$AppName // RAM PROFILE" 650 450
+    Add-Header $f "RAM PROFILE" "ใช้ค่าตาราง RAM ที่คุณกำหนดไว้เดิม"
 
-    $list = New-Object System.Windows.Forms.ListBox
-    $list.Font = $font
-    $list.Location = New-Object System.Drawing.Point(35,90)
-    $list.Size = New-Object System.Drawing.Size(770,300)
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.Location = New-Object System.Drawing.Point(50,150)
+    $combo.Size = New-Object System.Drawing.Size(400,40)
+    $combo.DropDownStyle = "DropDownList"
+    foreach ($key in $RamValues.Keys) { [void]$combo.Items.Add($key) }
+
+    $actual = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB)
+    if ($RamValues.Contains("$actual GB")) { $combo.SelectedItem = "$actual GB" } else { $combo.SelectedItem = "Default" }
+    $f.Controls.Add($combo)
+
+    $apply = New-Button "APPLY RAM PROFILE" 50 230 400 65 12
+    $back = New-Button "BACK" 50 310 400 55 11
+    $f.Controls.Add($apply);$f.Controls.Add($back)
+
+    $apply.Add_Click({
+        $b=New-LarzoneBackup
+        if (-not $b) { return }
+        $name=[string]$combo.SelectedItem
+        Set-DWord $ControlKey "SvcHostSplitThresholdInKB" ([uint32]$RamValues[$name])
+        Show-Message ("RAM Profile: {0}`r`nValue: {1}`r`n`r`nBackup:`r`n{2}" -f $name,(Format-Hex $RamValues[$name]),$b) "$AppName // RAM"
+    })
+    $back.Add_Click({$f.Close()})
+    [void]$f.ShowDialog()
+}
+
+function Show-BackupRestore {
+    $f = New-BaseForm "$AppName // BACKUP / RESTORE" 850 600
+    Add-Header $f "BACKUP / RESTORE" "สำรองและกู้คืนค่าที่ LARZONE แก้ไข"
+
+    $list=New-Object System.Windows.Forms.ListBox
+    $list.Location=New-Object System.Drawing.Point(40,125);$list.Size=New-Object System.Drawing.Size(740,300)
+    $list.BackColor=[System.Drawing.Color]::FromArgb(13,17,27);$list.ForeColor=[System.Drawing.Color]::White
+    $list.Font=New-Object System.Drawing.Font("Consolas",10)
     $f.Controls.Add($list)
 
-    function Refresh-List {
+    function Refresh-Backups {
         $list.Items.Clear()
-        Get-ChildItem $BackupRoot -Directory -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            ForEach-Object { [void]$list.Items.Add($_.FullName) }
-    }
-    Refresh-List
-
-    Make-Button $f "CREATE BACKUP" 35 420 220 60 {
-        New-Backup "MANUAL"
-        Refresh-List
-        Info "สร้าง Backup แล้ว"
-    } | Out-Null
-
-    Make-Button $f "RESTORE SELECTED" 275 420 250 60 {
-        if (-not $list.SelectedItem) { Info "กรุณาเลือก Backup"; return }
-        if (Confirm "Restore Registry จาก Backup นี้หรือไม่?") {
-            Restore-Backup ([string]$list.SelectedItem)
-            Info "Restore เสร็จแล้ว แนะนำ Restart Windows"
+        if(Test-Path -LiteralPath $BackupRoot){
+            Get-ChildItem -LiteralPath $BackupRoot -Directory | Sort-Object Name -Descending |
+                ForEach-Object {[void]$list.Items.Add($_.FullName)}
         }
-    } | Out-Null
+    }
 
-    Make-Button $f "REFRESH" 545 420 120 60 { Refresh-List } | Out-Null
-    Make-Button $f "ปิด" 665 420 140 60 { $f.Close() } | Out-Null
+    $new=New-Button "CREATE BACKUP" 40 460 230 60 11
+    $restore=New-Button "RESTORE SELECTED" 290 460 230 60 11
+    $refresh=New-Button "REFRESH" 540 460 240 60 11
+    $f.Controls.Add($new);$f.Controls.Add($restore);$f.Controls.Add($refresh)
+
+    $new.Add_Click({$b=New-LarzoneBackup;if($b){Refresh-Backups;Show-Message "Backup สำเร็จ`r`n`r`n$b" "$AppName // BACKUP"}})
+    $restore.Add_Click({
+        if($null -eq $list.SelectedItem){Show-Message "เลือก Backup ก่อน";return}
+        [void](Restore-LarzoneBackup ([string]$list.SelectedItem))
+    })
+    $refresh.Add_Click({Refresh-Backups})
+    Refresh-Backups
     [void]$f.ShowDialog()
 }
 
-# ---------- Main ----------
-$main = New-SimpleWindow "LARZONE // DEBLOAT V3.2.3" 820 620
-Add-Title $main "LARZONE // DEBLOAT"
-$subtitle = New-Object System.Windows.Forms.Label
-$subtitle.Text = "V3.2.3 FLEX UI — DEFAULT / CUSTOM เลือกได้อิสระ"
-$subtitle.Font = $font
-$subtitle.AutoSize = $true
-$subtitle.Location = New-Object System.Drawing.Point(35,72)
-$main.Controls.Add($subtitle)
+function Show-SystemNote {
+    $f=New-BaseForm "$AppName // SYSTEM NOTE" 900 650
+    Add-Header $f "SYSTEM NOTE" "ข้อมูลระบบ / ค่าปัจจุบัน / กฎของโปรไฟล์"
+    $box=New-Object System.Windows.Forms.TextBox
+    $box.Multiline=$true;$box.ReadOnly=$true;$box.ScrollBars="Vertical"
+    $box.Location=New-Object System.Drawing.Point(35,120);$box.Size=New-Object System.Drawing.Size(810,410)
+    $box.BackColor=[System.Drawing.Color]::FromArgb(13,17,27);$box.ForeColor=[System.Drawing.Color]::White
+    $box.Font=New-Object System.Drawing.Font("Consolas",10);$box.Text=Get-StatusText
+    $f.Controls.Add($box)
+    $refresh=New-Button "REFRESH" 35 555 250 55 11
+    $back=New-Button "BACK" 300 555 250 55 11
+    $f.Controls.Add($refresh);$f.Controls.Add($back)
+    $refresh.Add_Click({$box.Text=Get-StatusText})
+    $back.Add_Click({$f.Close()})
+    [void]$f.ShowDialog()
+}
 
-Make-Button $main "GAMING MODE" 35 120 350 75 { Open-Gaming } | Out-Null
-Make-Button $main "CUSTOM / DEBLOAT" 425 120 350 75 { Open-Custom } | Out-Null
-Make-Button $main "SYSTEM" 35 215 350 75 { Open-System } | Out-Null
-Make-Button $main "BACKUP / RESTORE" 425 215 350 75 { Open-Backup } | Out-Null
-
-Make-Button $main "SYSTEM NOTE" 35 310 350 65 {
-    Info "NORMAL / HIGH ไม่แตะ Win32 / Keyboard / Mouse / RAM`r`n`r`nCUSTOM / DEBLOAT = เลือกเอง`r`n`r`nBackup จะถูกสร้างก่อนการปรับแต่งหลัก"
-} | Out-Null
-
-Make-Button $main "EXIT" 425 310 350 65 { $main.Close() } | Out-Null
-
-$sys = New-Object System.Windows.Forms.Label
-$sys.Text = "STATUS : READY"
-$sys.ForeColor = [System.Drawing.Color]::LightGreen
-$sys.Font = $font
-$sys.AutoSize = $true
-$sys.Location = New-Object System.Drawing.Point(35,430)
-$main.Controls.Add($sys)
-
-[void]$main.ShowDialog()
+Show-MainMenu
