@@ -97,6 +97,25 @@ function Backup-RegKey([string]$nativeKey, [string]$outFile) {
     if ($LASTEXITCODE -ne 0) { throw "Backup registry failed: $nativeKey -> $outFile (exit=$LASTEXITCODE)" }
 }
 
+function Export-AppxSnapshot([string]$dir) {
+    # Snapshot ไว้ “ก่อน” debloat เพื่อดูว่าลบอะไรไปบ้าง และช่วยแก้ปัญหาได้ง่ายขึ้น
+    try {
+        Get-AppxPackage |
+            Select-Object Name, PackageFullName, Version, Publisher, InstallLocation |
+            Export-Csv (Join-Path $dir 'Appx_CurrentUser.csv') -NoTypeInformation -Encoding UTF8
+    } catch {}
+    try {
+        Get-AppxPackage -AllUsers |
+            Select-Object Name, PackageFullName, Version, Publisher |
+            Export-Csv (Join-Path $dir 'Appx_AllUsers.csv') -NoTypeInformation -Encoding UTF8
+    } catch {}
+    try {
+        Get-AppxProvisionedPackage -Online |
+            Select-Object DisplayName, PackageName, Version, PublisherId |
+            Export-Csv (Join-Path $dir 'Appx_Provisioned.csv') -NoTypeInformation -Encoding UTF8
+    } catch {}
+}
+
 function New-Backup([string]$profile = 'MANUAL') {
     if ($NoBackup) {
         Write-Log "Backup skipped (NoBackup) for profile=$profile" 'WARN'
@@ -121,6 +140,7 @@ function New-Backup([string]$profile = 'MANUAL') {
             Select-Object Name, StartMode, State |
             Export-Csv (Join-Path $dir 'Services.csv') -NoTypeInformation -Encoding UTF8
     } catch {}
+    try { Export-AppxSnapshot $dir } catch {}
 
     Set-Content (Join-Path $dir 'INFO.txt') @"
 LARZONE V3.2.5 BACKUP
@@ -209,6 +229,12 @@ $Tweaks = [ordered]@{
         @{ Id='PowerPlan'; Name='High Performance Power Plan'; Desc='เลือก High Performance Power Plan'; Risk='MEDIUM'; Default=$false }
         @{ Id='Animations'; Name='Disable Windows Animations'; Desc='ลด Animation ของ UI'; Risk='SAFE'; Default=$true }
     )
+    'DEBLOAT APPS' = @(
+        @{ Id='RemoveConsumerApps'; Name='Remove Consumer Apps (Common)'; Desc='ถอนแอปทั่วไปที่มักไม่จำเป็น (News/Weather/Maps/3DViewer/Solitaire/ฯลฯ)'; Risk='MEDIUM'; Default=$false }
+        @{ Id='RemoveXboxApps'; Name='Remove Xbox Apps'; Desc='ถอน/ลดชุดแอป Xbox และ Gaming ที่มากับระบบ (ถ้าไม่ได้ใช้)'; Risk='MEDIUM'; Default=$false }
+        @{ Id='RemoveClipchamp'; Name='Remove Clipchamp'; Desc='ถอน Clipchamp'; Risk='SAFE'; Default=$false }
+        @{ Id='RemoveTeamsAppx'; Name='Remove Teams (Appx)'; Desc='ถอน Teams แบบ Appx/consumer (ไม่ยุ่งกับ Teams for Work/School ที่ติดตั้งแบบ MSI)'; Risk='MEDIUM'; Default=$false }
+    )
     'OPTIONAL / AGGRESSIVE' = @(
         @{ Id='OneDrive'; Name='Remove OneDrive'; Desc='ถอน OneDrive ออกจากระบบ (สคริปต์นี้ไม่ถอนอัตโนมัติ)'; Risk='MEDIUM'; Default=$false }
         @{ Id='DisableUpdate'; Name='Disable Windows Update'; Desc='หยุด Windows Update (สคริปต์นี้บล็อคไม่ให้ทำอัตโนมัติ)'; Risk='RISKY'; Default=$false }
@@ -220,6 +246,91 @@ $RiskColor = @{
     SAFE   = [Drawing.Color]::LightGreen
     MEDIUM = [Drawing.Color]::Gold
     RISKY  = [Drawing.Color]::Tomato
+}
+
+$AppxDebloatGroups = @{
+    RemoveClipchamp    = @('Clipchamp.Clipchamp')
+    RemoveTeamsAppx    = @('MicrosoftTeams', 'MSTeams')
+    RemoveXboxApps     = @(
+        'Microsoft.GamingApp',
+        'Microsoft.XboxApp',
+        'Microsoft.XboxGameOverlay',
+        'Microsoft.XboxGamingOverlay',
+        'Microsoft.XboxIdentityProvider',
+        'Microsoft.XboxSpeechToTextOverlay'
+    )
+    RemoveConsumerApps = @(
+        'Microsoft.BingNews',
+        'Microsoft.BingWeather',
+        'Microsoft.GetHelp',
+        'Microsoft.Getstarted',
+        'Microsoft.Microsoft3DViewer',
+        'Microsoft.MicrosoftSolitaireCollection',
+        'Microsoft.People',
+        'Microsoft.Todos',
+        'Microsoft.WindowsMaps',
+        'Microsoft.ZuneMusic',
+        'Microsoft.ZuneVideo'
+    )
+}
+
+function Get-AppxMatches([string[]]$patterns, [switch]$AllUsers) {
+    $pkgs = @()
+    $src = if ($AllUsers) { @(Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue) } else { @(Get-AppxPackage -ErrorAction SilentlyContinue) }
+    foreach ($p in $patterns) { $pkgs += @($src | Where-Object { $_.Name -like $p }) }
+    return $pkgs | Sort-Object Name -Unique
+}
+
+function Get-ProvisionedMatches([string[]]$patterns) {
+    $prov = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
+    $out = @()
+    foreach ($p in $patterns) { $out += @($prov | Where-Object { $_.DisplayName -like $p }) }
+    return $out | Sort-Object DisplayName -Unique
+}
+
+function Remove-AppxByPatterns([string]$GroupId) {
+    if (-not $AppxDebloatGroups.ContainsKey($GroupId)) { throw "Unknown debloat group: $GroupId" }
+    $patterns = @($AppxDebloatGroups[$GroupId])
+
+    # 1) ลบ Appx ของ user ปัจจุบัน
+    $current = @(Get-AppxMatches $patterns)
+    foreach ($pkg in $current) {
+        $target = $pkg.PackageFullName
+        if ($PSCmdlet.ShouldProcess($target, "Remove-AppxPackage (CurrentUser)")) {
+            try {
+                Write-Log "APPX REMOVE (CurrentUser) $($pkg.Name) :: $target"
+                Remove-AppxPackage -Package $target -ErrorAction Stop
+            } catch {
+                Write-Log "APPX REMOVE FAIL (CurrentUser) $($pkg.Name) :: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    }
+
+    # 2) ลบ provisioned เพื่อไม่ให้ติดกลับใน user ใหม่/รีโปรไฟล์
+    $prov = @(Get-ProvisionedMatches $patterns)
+    foreach ($p in $prov) {
+        if ($PSCmdlet.ShouldProcess($p.PackageName, "Remove-AppxProvisionedPackage (Online)")) {
+            try {
+                Write-Log "PROVISIONED REMOVE $($p.DisplayName) :: $($p.PackageName)"
+                Remove-AppxProvisionedPackage -Online -PackageName $p.PackageName -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Log "PROVISIONED REMOVE FAIL $($p.DisplayName) :: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    }
+
+    # 3) พยายาม remove จาก AllUsers เฉพาะที่ทำได้ (บางแพ็กเกจ Windows ไม่ยอม)
+    $all = @(Get-AppxMatches $patterns -AllUsers)
+    foreach ($pkg in $all) {
+        if ($PSCmdlet.ShouldProcess($pkg.Name, "Attempt remove (AllUsers - best effort)")) {
+            try {
+                Write-Log "APPX REMOVE (AllUsers attempt) $($pkg.Name) :: $($pkg.PackageFullName)"
+                Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
+            } catch {
+                Write-Log "APPX REMOVE FAIL (AllUsers attempt) $($pkg.Name) :: $($_.Exception.Message)" 'WARN'
+            }
+        }
+    }
 }
 
 function Apply-Tweak([string]$Id) {
@@ -295,6 +406,10 @@ function Apply-Tweak([string]$Id) {
             Set-RegDword  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarAnimations' 0
             Set-RegString 'HKCU:\Control Panel\Desktop\WindowMetrics' 'MinAnimate' '0'
         }
+        'RemoveClipchamp' { Remove-AppxByPatterns 'RemoveClipchamp' }
+        'RemoveTeamsAppx' { Remove-AppxByPatterns 'RemoveTeamsAppx' }
+        'RemoveXboxApps' { Remove-AppxByPatterns 'RemoveXboxApps' }
+        'RemoveConsumerApps' { Remove-AppxByPatterns 'RemoveConsumerApps' }
         'OneDrive' {
             Write-Log 'OneDrive selected - removal intentionally not automatic in rewrite' 'WARN'
         }
@@ -341,6 +456,22 @@ function Verify-Tweak([string]$Id) {
             $a = (Get-RegValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'TaskbarAnimations')
             $m = (Get-RegValue 'HKCU:\Control Panel\Desktop\WindowMetrics' 'MinAnimate')
             return (($a -eq 0) -and ("$m" -eq '0'))
+        }
+        'RemoveClipchamp' {
+            $p = @($AppxDebloatGroups.RemoveClipchamp)
+            return ((@(Get-AppxMatches $p).Count -eq 0) -and (@(Get-ProvisionedMatches $p).Count -eq 0))
+        }
+        'RemoveTeamsAppx' {
+            $p = @($AppxDebloatGroups.RemoveTeamsAppx)
+            return ((@(Get-AppxMatches $p).Count -eq 0) -and (@(Get-ProvisionedMatches $p).Count -eq 0))
+        }
+        'RemoveXboxApps' {
+            $p = @($AppxDebloatGroups.RemoveXboxApps)
+            return ((@(Get-AppxMatches $p).Count -eq 0) -and (@(Get-ProvisionedMatches $p).Count -eq 0))
+        }
+        'RemoveConsumerApps' {
+            $p = @($AppxDebloatGroups.RemoveConsumerApps)
+            return ((@(Get-AppxMatches $p).Count -eq 0) -and (@(Get-ProvisionedMatches $p).Count -eq 0))
         }
         default { return $true }
     }
@@ -393,12 +524,28 @@ function Parse-Uint32([string]$Text) {
 }
 
 # ----------------------- UI Helpers -----------------------
+$Theme = @{
+    Bg          = [Drawing.Color]::FromArgb(11, 10, 18)
+    Panel       = [Drawing.Color]::FromArgb(15, 22, 32)
+    Card        = [Drawing.Color]::FromArgb(20, 28, 40)
+    Button      = [Drawing.Color]::FromArgb(30, 27, 48)
+    ButtonHover = [Drawing.Color]::FromArgb(52, 42, 85)
+    ButtonDown  = [Drawing.Color]::FromArgb(72, 55, 120)
+    Accent      = [Drawing.Color]::FromArgb(145, 120, 255)
+    Accent2     = [Drawing.Color]::FromArgb(105, 85, 220)
+    MutedText   = [Drawing.Color]::Gainsboro
+}
+
+function New-Font([string]$preferred, [float]$size, [Drawing.FontStyle]$style = [Drawing.FontStyle]::Regular) {
+    try { return New-Object Drawing.Font($preferred, $size, $style) } catch { return New-Object Drawing.Font('Segoe UI', $size, $style) }
+}
+
 function New-Window([string]$Title, [int]$W = 900, [int]$H = 650) {
     $f = New-Object Windows.Forms.Form
     $f.Text = $Title
     $f.StartPosition = 'CenterScreen'
     $f.ClientSize = New-Object Drawing.Size($W, $H)
-    $f.BackColor = [Drawing.Color]::FromArgb(11, 10, 18)
+    $f.BackColor = $Theme.Bg
     $f.ForeColor = [Drawing.Color]::White
     $f.FormBorderStyle = 'FixedSingle'
     $f.MaximizeBox = $false
@@ -406,31 +553,72 @@ function New-Window([string]$Title, [int]$W = 900, [int]$H = 650) {
 }
 
 function Title-UI($Form, [string]$Text) {
+    # Header bar แบบ modern
+    $header = New-Object Windows.Forms.Panel
+    $header.Location = New-Object Drawing.Point(0, 0)
+    $header.Size = New-Object Drawing.Size($Form.ClientSize.Width, 78)
+    $header.BackColor = $Theme.Panel
+    $header.Anchor = 'Top,Left,Right'
+    $Form.Controls.Add($header)
+
+    $accent = New-Object Windows.Forms.Panel
+    $accent.Location = New-Object Drawing.Point(0, 76)
+    $accent.Size = New-Object Drawing.Size($Form.ClientSize.Width, 2)
+    $accent.BackColor = $Theme.Accent2
+    $accent.Anchor = 'Top,Left,Right'
+    $Form.Controls.Add($accent)
+
     $l = New-Object Windows.Forms.Label
     $l.Text = $Text
-    $l.Font = New-Object Drawing.Font('Segoe UI Semibold', 22)
-    $l.ForeColor = [Drawing.Color]::FromArgb(145, 120, 255)
+    $l.Font = (New-Font 'Segoe UI Variable Display Semibold' 20 ([Drawing.FontStyle]::Bold))
+    $l.ForeColor = $Theme.Accent
     $l.AutoSize = $true
-    $l.Location = New-Object Drawing.Point(30, 25)
-    $Form.Controls.Add($l)
+    $l.Location = New-Object Drawing.Point(28, 20)
+    $header.Controls.Add($l)
+
+    $sub = New-Object Windows.Forms.Label
+    $sub.Text = "V3.2.5 Rewrite  •  Log: $LogFile"
+    $sub.Font = (New-Font 'Segoe UI Variable Text' 9)
+    $sub.ForeColor = $Theme.MutedText
+    $sub.AutoSize = $true
+    $sub.Location = New-Object Drawing.Point(30, 52)
+    $header.Controls.Add($sub)
 }
 
 function Btn-UI($Form, [string]$Text, [int]$X, [int]$Y, [int]$W, [int]$H, $Action) {
     $b = New-Object Windows.Forms.Button
     $b.Text = $Text
-    $b.Font = New-Object Drawing.Font('Segoe UI Semibold', 11)
+    $b.Font = (New-Font 'Segoe UI Variable Text Semibold' 11 ([Drawing.FontStyle]::Bold))
     $b.Location = New-Object Drawing.Point($X, $Y)
     $b.Size = New-Object Drawing.Size($W, $H)
-    $b.BackColor = [Drawing.Color]::FromArgb(30, 27, 48)
+    $b.BackColor = $Theme.Button
     $b.ForeColor = [Drawing.Color]::White
     $b.FlatStyle = 'Flat'
-    $b.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(105, 85, 220)
+    $b.FlatAppearance.BorderColor = $Theme.Accent2
     $b.FlatAppearance.BorderSize = 1
+    $b.FlatAppearance.MouseOverBackColor = $Theme.ButtonHover
+    $b.FlatAppearance.MouseDownBackColor = $Theme.ButtonDown
+    $b.Cursor = [Windows.Forms.Cursors]::Hand
     $b.Add_Click($Action)
-    $b.Add_MouseEnter({ $this.BackColor = [Drawing.Color]::FromArgb(52, 42, 85) })
-    $b.Add_MouseLeave({ $this.BackColor = [Drawing.Color]::FromArgb(30, 27, 48) })
     $Form.Controls.Add($b)
     return $b
+}
+
+function Btn-PrimaryUI($Form, [string]$Text, [int]$X, [int]$Y, [int]$W, [int]$H, $Action) {
+    $b = Btn-UI $Form $Text $X $Y $W $H $Action
+    $b.BackColor = $Theme.Accent2
+    $b.FlatAppearance.BorderColor = $Theme.Accent
+    return $b
+}
+
+function New-CardPanel($Parent, [int]$X, [int]$Y, [int]$W, [int]$H) {
+    $p = New-Object Windows.Forms.Panel
+    $p.Location = New-Object Drawing.Point($X, $Y)
+    $p.Size = New-Object Drawing.Size($W, $H)
+    $p.BackColor = $Theme.Card
+    $p.BorderStyle = 'FixedSingle'
+    $Parent.Controls.Add($p)
+    return $p
 }
 
 function Wire-MouseWheel($control, $panel) {
@@ -451,51 +639,55 @@ function Open-CategoryUI([string]$Category) {
 
     $legend = New-Object Windows.Forms.Label
     $legend.Text = '🟢 SAFE     🟡 MEDIUM     🔴 RISKY'
-    $legend.Font = New-Object Drawing.Font('Segoe UI', 10)
+    $legend.Font = (New-Font 'Segoe UI Variable Text' 10)
     $legend.AutoSize = $true
-    $legend.Location = New-Object Drawing.Point(35, 70)
+    $legend.Location = New-Object Drawing.Point(35, 88)
     $f.Controls.Add($legend)
 
     $panel = New-Object Windows.Forms.Panel
     $panel.AutoScroll = $true
     $panel.VerticalScroll.SmallChange = 35
     $panel.VerticalScroll.LargeChange = 140
-    $panel.Location = New-Object Drawing.Point(25, 105)
+    $panel.Location = New-Object Drawing.Point(25, 125)
     $panel.Size = New-Object Drawing.Size(930, 485)
     $panel.BorderStyle = 'FixedSingle'
     $panel.TabStop = $true
+    $panel.BackColor = $Theme.Panel
     $f.Controls.Add($panel)
     $panel.Add_MouseEnter({ $panel.Focus() })
 
     $checks = @{}
-    $y = 15
+    $y = 16
     foreach ($item in $items) {
+        $card = New-CardPanel $panel 16 $y 885 62
+
         $cb = New-Object Windows.Forms.CheckBox
         $cb.Text = $item.Name
-        $cb.Font = New-Object Drawing.Font('Segoe UI Semibold', 11)
+        $cb.Font = (New-Font 'Segoe UI Variable Text Semibold' 11 ([Drawing.FontStyle]::Bold))
         $cb.ForeColor = $RiskColor[$item.Risk]
         $cb.AutoSize = $true
-        $cb.Location = New-Object Drawing.Point(20, $y)
+        $cb.Location = New-Object Drawing.Point(14, 10)
         $cb.Checked = [bool]$item.Default
-        $panel.Controls.Add($cb)
+        $card.Controls.Add($cb)
         $checks[$item.Id] = $cb
 
         $desc = New-Object Windows.Forms.Label
         $desc.Text = $item.Desc
-        $desc.Font = New-Object Drawing.Font('Segoe UI', 9)
-        $desc.ForeColor = [Drawing.Color]::Gainsboro
+        $desc.Font = (New-Font 'Segoe UI Variable Text' 9)
+        $desc.ForeColor = $Theme.MutedText
         $desc.AutoSize = $true
-        $desc.Location = New-Object Drawing.Point(45, ($y + 28))
-        $panel.Controls.Add($desc)
-        $y += 68
+        $desc.Location = New-Object Drawing.Point(36, 34)
+        $card.Controls.Add($desc)
+
+        $y += 72
     }
     $panel.AutoScrollMinSize = New-Object Drawing.Size(0, ($y + 20))
     Wire-MouseWheel $panel $panel
 
-    Btn-UI $f 'DEFAULT' 35 610 165 50 { foreach ($item in $items) { $checks[$item.Id].Checked = [bool]$item.Default } } | Out-Null
-    Btn-UI $f 'ALL ON' 215 610 165 50 { foreach ($c in $checks.Values) { $c.Checked = $true } } | Out-Null
-    Btn-UI $f 'ALL OFF' 395 610 165 50 { foreach ($c in $checks.Values) { $c.Checked = $false } } | Out-Null
-    Btn-UI $f 'APPLY' 575 610 165 50 {
+    Btn-UI $f 'DEFAULT' 35 615 165 50 { foreach ($item in $items) { $checks[$item.Id].Checked = [bool]$item.Default } } | Out-Null
+    Btn-UI $f 'ALL ON' 215 615 165 50 { foreach ($c in $checks.Values) { $c.Checked = $true } } | Out-Null
+    Btn-UI $f 'ALL OFF' 395 615 165 50 { foreach ($c in $checks.Values) { $c.Checked = $false } } | Out-Null
+    Btn-PrimaryUI $f 'APPLY' 575 615 165 50 {
         $selected = @($checks.GetEnumerator() | Where-Object { $_.Value.Checked } | ForEach-Object Key)
         if (-not $selected -or $selected.Count -eq 0) { Info-UI 'ยังไม่ได้เลือกค่า'; return }
         if (-not (Confirm-UI "LARZONE จะสร้าง Backup ก่อน Apply และตรวจสอบผลหลัง Apply`r`n`r`nดำเนินการต่อหรือไม่?")) { return }
@@ -505,7 +697,7 @@ function Open-CategoryUI([string]$Category) {
         $badCount = @($results | Where-Object { -not $_.OK }).Count
         Info-UI "Apply เสร็จ`r`n`r`nสำเร็จ: $okCount`r`nไม่ผ่าน/ตรวจสอบไม่ได้: $badCount`r`n`r`nLog: $LogFile"
     } | Out-Null
-    Btn-UI $f 'BACK' 755 610 165 50 { $f.Close() } | Out-Null
+    Btn-UI $f 'BACK' 755 615 165 50 { $f.Close() } | Out-Null
 
     [void]$f.ShowDialog()
 }
@@ -516,9 +708,9 @@ function Open-CustomUI {
 
     $desc = New-Object Windows.Forms.Label
     $desc.Text = 'เลือกหมวดเพื่อปรับทีละค่า  •  🟢 SAFE  🟡 MEDIUM  🔴 RISKY'
-    $desc.Font = New-Object Drawing.Font('Segoe UI', 10)
+    $desc.Font = (New-Font 'Segoe UI Variable Text' 10)
     $desc.AutoSize = $true
-    $desc.Location = New-Object Drawing.Point(35, 75)
+    $desc.Location = New-Object Drawing.Point(35, 88)
     $f.Controls.Add($desc)
 
     $panel = New-Object Windows.Forms.Panel
@@ -526,25 +718,30 @@ function Open-CustomUI {
     $panel.VerticalScroll.SmallChange = 35
     $panel.VerticalScroll.LargeChange = 140
     $panel.TabStop = $true
-    $panel.Location = New-Object Drawing.Point(25, 105)
+    $panel.Location = New-Object Drawing.Point(25, 125)
     $panel.Size = New-Object Drawing.Size(850, 455)
     $panel.BorderStyle = 'FixedSingle'
+    $panel.BackColor = $Theme.Panel
     $f.Controls.Add($panel)
     $panel.Add_MouseEnter({ $panel.Focus() })
 
     $categories = @($Tweaks.Keys)
     $y = 15
     foreach ($cat in $categories) {
-        $risk = if ($cat -eq 'OPTIONAL / AGGRESSIVE') { '🔴' } else { '🟢' }
+        $risks = @($Tweaks[$cat] | ForEach-Object { $_.Risk })
+        $riskIcon = if ($risks -contains 'RISKY') { '🔴' } elseif ($risks -contains 'MEDIUM') { '🟡' } else { '🟢' }
         $b = New-Object Windows.Forms.Button
-        $b.Text = "$risk  $cat  >"
-        $b.Font = New-Object Drawing.Font('Segoe UI Semibold', 11)
+        $b.Text = "$riskIcon  $cat  >"
+        $b.Font = (New-Font 'Segoe UI Variable Text Semibold' 11 ([Drawing.FontStyle]::Bold))
         $b.Location = New-Object Drawing.Point(15, $y)
         $b.Size = New-Object Drawing.Size(790, 48)
-        $b.BackColor = [Drawing.Color]::FromArgb(30, 27, 48)
+        $b.BackColor = $Theme.Button
         $b.ForeColor = [Drawing.Color]::White
         $b.FlatStyle = 'Flat'
-        $b.FlatAppearance.BorderColor = [Drawing.Color]::FromArgb(105, 85, 220)
+        $b.FlatAppearance.BorderColor = $Theme.Accent2
+        $b.FlatAppearance.MouseOverBackColor = $Theme.ButtonHover
+        $b.FlatAppearance.MouseDownBackColor = $Theme.ButtonDown
+        $b.Cursor = [Windows.Forms.Cursors]::Hand
         $b.Tag = $cat
         $b.Add_Click({ Open-CategoryUI ([string]$this.Tag) })
         $panel.Controls.Add($b)
