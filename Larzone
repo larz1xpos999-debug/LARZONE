@@ -292,6 +292,164 @@ function Set-HighPerformancePowerPlan {
     }
 }
 
+function Backup-RegistryKey {
+    param(
+        [Parameter(Mandatory=$true)][string]$RegPath,
+        [Parameter(Mandatory=$true)][string]$OutFile,
+        [Parameter(Mandatory=$true)][System.Windows.Forms.TextBox]$LogBox
+    )
+    try {
+        $outDir = Split-Path -Parent $OutFile
+        if (-not (Test-Path -LiteralPath $outDir)) {
+            New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+        }
+        $null = & reg.exe export $RegPath $OutFile /y
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log -LogBox $LogBox -Level "OK" -Message "สำรอง Registry แล้ว: $OutFile"
+        } else {
+            Write-Log -LogBox $LogBox -Level "WARN" -Message "สำรอง Registry ไม่สำเร็จ: $RegPath (อาจไม่มีคีย์นี้)"
+        }
+    } catch {
+        Write-Log -LogBox $LogBox -Level "ERR" -Message "สำรอง Registry ไม่สำเร็จ: $RegPath | $($_.Exception.Message)"
+    }
+}
+
+function Set-RegistryTweaksForFiveM {
+    param(
+        [Parameter(Mandatory=$true)][System.Windows.Forms.TextBox]$LogBox
+    )
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log -LogBox $LogBox -Level "WARN" -Message "ข้ามการปรับ Registry: ต้องรันแบบแอดมิน"
+        return $false
+    }
+
+    $stamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
+    $backupDir = Join-Path $PSScriptRoot "Backups"
+
+    # สำรองคีย์ที่จะแก้
+    Backup-RegistryKey -RegPath "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" -OutFile (Join-Path $backupDir "Tasks_Games_$stamp.reg") -LogBox $LogBox
+    Backup-RegistryKey -RegPath "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" -OutFile (Join-Path $backupDir "PriorityControl_$stamp.reg") -LogBox $LogBox
+    Backup-RegistryKey -RegPath "HKLM\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters" -OutFile (Join-Path $backupDir "kbdclass_Parameters_$stamp.reg") -LogBox $LogBox
+    Backup-RegistryKey -RegPath "HKLM\SYSTEM\CurrentControlSet\Services\mouclass\Parameters" -OutFile (Join-Path $backupDir "mouclass_Parameters_$stamp.reg") -LogBox $LogBox
+
+    try {
+        Write-Log -LogBox $LogBox -Level "INFO" -Message "กำลังใส่ค่า Registry สำหรับโหมด Games..."
+
+        $gamesKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games"
+        if (-not (Test-Path -LiteralPath $gamesKey)) {
+            New-Item -Path $gamesKey -Force | Out-Null
+        }
+
+        # ตามค่าที่ผู้ใช้ให้มา
+        New-ItemProperty -Path $gamesKey -Name "GPU Priority" -PropertyType DWord -Value 8 -Force | Out-Null
+        New-ItemProperty -Path $gamesKey -Name "Priority" -PropertyType DWord -Value 6 -Force | Out-Null
+        New-ItemProperty -Path $gamesKey -Name "Scheduling Category" -PropertyType String -Value "High" -Force | Out-Null
+        New-ItemProperty -Path $gamesKey -Name "SFIO Priority" -PropertyType DWord -Value 6 -Force | Out-Null
+
+        Write-Log -LogBox $LogBox -Level "OK" -Message "ตั้งค่า Tasks\\Games แล้ว (GPU Priority=8, Priority=6, Scheduling Category=High, SFIO Priority=6)"
+
+        $prioKey = "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\PriorityControl"
+        if (-not (Test-Path -LiteralPath $prioKey)) {
+            New-Item -Path $prioKey -Force | Out-Null
+        }
+        # Win32PrioritySeparation = 0x1a
+        New-ItemProperty -Path $prioKey -Name "Win32PrioritySeparation" -PropertyType DWord -Value 0x1A -Force | Out-Null
+        Write-Log -LogBox $LogBox -Level "OK" -Message "ตั้งค่า Win32PrioritySeparation = 0x1A แล้ว"
+
+        $kbdKey = "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\kbdclass\Parameters"
+        if (-not (Test-Path -LiteralPath $kbdKey)) {
+            New-Item -Path $kbdKey -Force | Out-Null
+        }
+        New-ItemProperty -Path $kbdKey -Name "KeyboardDataQueueSize" -PropertyType DWord -Value 20 -Force | Out-Null
+        Write-Log -LogBox $LogBox -Level "OK" -Message "ตั้งค่า KeyboardDataQueueSize = 20 แล้ว"
+
+        $mouKey = "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\mouclass\Parameters"
+        if (-not (Test-Path -LiteralPath $mouKey)) {
+            New-Item -Path $mouKey -Force | Out-Null
+        }
+        New-ItemProperty -Path $mouKey -Name "MouseDataQueueSize" -PropertyType DWord -Value 25 -Force | Out-Null
+        Write-Log -LogBox $LogBox -Level "OK" -Message "ตั้งค่า MouseDataQueueSize = 25 แล้ว"
+
+        Write-Log -LogBox $LogBox -Level "INFO" -Message "แนะนำ: รีสตาร์ตเครื่อง 1 ครั้งเพื่อให้ค่าบางส่วนมีผล"
+        return $true
+    } catch {
+        Write-Log -LogBox $LogBox -Level "ERR" -Message "ตั้งค่า Registry ไม่สำเร็จ | $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Get-TotalRamBytes {
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem
+        if ($null -eq $cs -or -not $cs.TotalPhysicalMemory) { return 0 }
+        return [int64]$cs.TotalPhysicalMemory
+    } catch {
+        return 0
+    }
+}
+
+function Get-RecommendedSvcHostSplitThresholdHex {
+    param([Parameter(Mandatory=$true)][int64]$TotalRamBytes)
+
+    # ตารางตามค่าที่ผู้ใช้ให้มา (หน่วยเป็น "hex" ของ KB)
+    # หมายเหตุ: เราจะใช้การ "ปัดขึ้น" เป็นระดับ RAM ที่ใกล้สุดในตาราง
+    if ($TotalRamBytes -le 0) { return "380000" }
+
+    $ramGB = [math]::Ceiling($TotalRamBytes / 1GB)
+
+    if ($ramGB -le 4) { return "400000" }
+    elseif ($ramGB -le 6) { return "600000" }
+    elseif ($ramGB -le 8) { return "800000" }
+    elseif ($ramGB -le 12) { return "C00000" }
+    elseif ($ramGB -le 16) { return "1000000" }
+    elseif ($ramGB -le 24) { return "1800000" }
+    elseif ($ramGB -le 32) { return "2000000" }
+    else { return "4000000" } # 64GB+
+}
+
+function Set-SvcHostSplitThresholdInKB {
+    param(
+        [Parameter(Mandatory=$true)][System.Windows.Forms.TextBox]$LogBox
+    )
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log -LogBox $LogBox -Level "WARN" -Message "ข้ามการลด Process (svchost): ต้องรันแบบแอดมิน"
+        return $false
+    }
+
+    $totalBytes = Get-TotalRamBytes
+    if ($totalBytes -le 0) {
+        Write-Log -LogBox $LogBox -Level "ERR" -Message "ตรวจจับ RAM ไม่สำเร็จ"
+        return $false
+    }
+
+    $hex = Get-RecommendedSvcHostSplitThresholdHex -TotalRamBytes $totalBytes
+    $thresholdKB = [uint32]([Convert]::ToInt32($hex, 16))
+    $ramGBExact = [math]::Round(($totalBytes / 1GB), 2)
+
+    $stamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
+    $backupDir = Join-Path $PSScriptRoot "Backups"
+    Backup-RegistryKey -RegPath "HKLM\SYSTEM\CurrentControlSet\Control" -OutFile (Join-Path $backupDir "Control_$stamp.reg") -LogBox $LogBox
+
+    try {
+        $controlKey = "Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control"
+        if (-not (Test-Path -LiteralPath $controlKey)) {
+            New-Item -Path $controlKey -Force | Out-Null
+        }
+
+        # คีย์นี้ช่วย "รวม" บริการกลับมารันใน svchost น้อยลง (ลดจำนวน process) เมื่อ threshold > RAM เครื่อง
+        New-ItemProperty -Path $controlKey -Name "SvcHostSplitThresholdInKB" -PropertyType DWord -Value $thresholdKB -Force | Out-Null
+
+        Write-Log -LogBox $LogBox -Level "OK" -Message "ตั้งค่า SvcHostSplitThresholdInKB = 0x$hex ($thresholdKB KB) แล้ว"
+        Write-Log -LogBox $LogBox -Level "INFO" -Message "RAM ตรวจพบ ~ $ramGBExact GB (แนะนำรีสตาร์ต 1 ครั้ง)"
+        return $true
+    } catch {
+        Write-Log -LogBox $LogBox -Level "ERR" -Message "ตั้งค่า SvcHostSplitThresholdInKB ไม่สำเร็จ | $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # -------------------------
 # สร้าง UI (WinForms)
 # -------------------------
@@ -346,7 +504,7 @@ $panelRight.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 35)
 $grpActions = New-Object System.Windows.Forms.GroupBox
 $grpActions.Text = "ตัวเลือก"
 $grpActions.Location = New-Object System.Drawing.Point(14, 14)
-$grpActions.Size = New-Object System.Drawing.Size(372, 230)
+$grpActions.Size = New-Object System.Drawing.Size(372, 300)
 $grpActions.ForeColor = [System.Drawing.Color]::Gainsboro
 $grpActions.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 35)
 
@@ -380,14 +538,37 @@ $chkHighPerf.Checked = $false
 $chkHighPerf.AutoSize = $true
 $chkHighPerf.Location = New-Object System.Drawing.Point(18, 152)
 
+$chkRegistryTweaks = New-Object System.Windows.Forms.CheckBox
+$chkRegistryTweaks.Text = "ปรับ Registry สำหรับ Games (ต้องแอดมิน/แนะนำรีสตาร์ต)"
+$chkRegistryTweaks.Checked = $false
+$chkRegistryTweaks.AutoSize = $true
+$chkRegistryTweaks.Location = New-Object System.Drawing.Point(18, 182)
+
+$totalRamBytesUi = Get-TotalRamBytes
+$ramGBExactUi = if ($totalRamBytesUi -gt 0) { [math]::Round(($totalRamBytesUi / 1GB), 2) } else { 0 }
+$svcHexUi = Get-RecommendedSvcHostSplitThresholdHex -TotalRamBytes $totalRamBytesUi
+$svcKbUi = [uint32]([Convert]::ToInt32($svcHexUi, 16))
+
+$chkSvcHostReduceProc = New-Object System.Windows.Forms.CheckBox
+$chkSvcHostReduceProc.Text = "ลด Process (svchost) ตาม RAM (SvcHostSplitThresholdInKB) (ต้องแอดมิน)"
+$chkSvcHostReduceProc.Checked = $false
+$chkSvcHostReduceProc.AutoSize = $true
+$chkSvcHostReduceProc.Location = New-Object System.Drawing.Point(18, 212)
+
+$lblSvcHostHint = New-Object System.Windows.Forms.Label
+$lblSvcHostHint.AutoSize = $true
+$lblSvcHostHint.Location = New-Object System.Drawing.Point(36, 236)
+$lblSvcHostHint.ForeColor = [System.Drawing.Color]::FromArgb(170, 180, 190)
+$lblSvcHostHint.Text = "RAM ~ $ramGBExactUi GB  -> แนะนำ 0x$svcHexUi ($svcKbUi KB)  (แนะนำรีสตาร์ต)"
+
 $lblCitizenFx = New-Object System.Windows.Forms.Label
 $lblCitizenFx.Text = "พาธ CitizenFX (Roaming):"
 $lblCitizenFx.AutoSize = $true
-$lblCitizenFx.Location = New-Object System.Drawing.Point(18, 184)
+$lblCitizenFx.Location = New-Object System.Drawing.Point(18, 260)
 $lblCitizenFx.ForeColor = [System.Drawing.Color]::FromArgb(170, 180, 190)
 
 $txtCitizenFx = New-Object System.Windows.Forms.TextBox
-$txtCitizenFx.Location = New-Object System.Drawing.Point(18, 206)
+$txtCitizenFx.Location = New-Object System.Drawing.Point(18, 282)
 $txtCitizenFx.Size = New-Object System.Drawing.Size(336, 24)
 $txtCitizenFx.Text = (Join-Path ([Environment]::GetFolderPath("ApplicationData")) "CitizenFX")
 $txtCitizenFx.BackColor = [System.Drawing.Color]::FromArgb(18, 20, 26)
@@ -396,7 +577,7 @@ $txtCitizenFx.BorderStyle = "FixedSingle"
 
 $btnBrowse = New-Object System.Windows.Forms.Button
 $btnBrowse.Text = "เลือกโฟลเดอร์..."
-$btnBrowse.Location = New-Object System.Drawing.Point(18, 250)
+$btnBrowse.Location = New-Object System.Drawing.Point(18, 326)
 $btnBrowse.Size = New-Object System.Drawing.Size(120, 32)
 $btnBrowse.FlatStyle = "Flat"
 $btnBrowse.BackColor = [System.Drawing.Color]::FromArgb(40, 44, 54)
@@ -404,7 +585,7 @@ $btnBrowse.ForeColor = [System.Drawing.Color]::Gainsboro
 
 $btnOpenCitizenFx = New-Object System.Windows.Forms.Button
 $btnOpenCitizenFx.Text = "เปิด CitizenFX"
-$btnOpenCitizenFx.Location = New-Object System.Drawing.Point(150, 250)
+$btnOpenCitizenFx.Location = New-Object System.Drawing.Point(150, 326)
 $btnOpenCitizenFx.Size = New-Object System.Drawing.Size(120, 32)
 $btnOpenCitizenFx.FlatStyle = "Flat"
 $btnOpenCitizenFx.BackColor = [System.Drawing.Color]::FromArgb(40, 44, 54)
@@ -412,7 +593,7 @@ $btnOpenCitizenFx.ForeColor = [System.Drawing.Color]::Gainsboro
 
 $btnStart = New-Object System.Windows.Forms.Button
 $btnStart.Text = "เริ่มทำงาน"
-$btnStart.Location = New-Object System.Drawing.Point(278, 250)
+$btnStart.Location = New-Object System.Drawing.Point(278, 326)
 $btnStart.Size = New-Object System.Drawing.Size(76, 32)
 $btnStart.FlatStyle = "Flat"
 $btnStart.BackColor = [System.Drawing.Color]::FromArgb(76, 152, 240)
@@ -420,20 +601,21 @@ $btnStart.ForeColor = [System.Drawing.Color]::White
 
 $grpTips = New-Object System.Windows.Forms.GroupBox
 $grpTips.Text = "คำแนะนำ"
-$grpTips.Location = New-Object System.Drawing.Point(14, 300)
-$grpTips.Size = New-Object System.Drawing.Size(372, 140)
+$grpTips.Location = New-Object System.Drawing.Point(14, 370)
+$grpTips.Size = New-Object System.Drawing.Size(372, 70)
 $grpTips.ForeColor = [System.Drawing.Color]::Gainsboro
 $grpTips.BackColor = [System.Drawing.Color]::FromArgb(26, 28, 35)
 
 $tips = New-Object System.Windows.Forms.Label
 $tips.AutoSize = $false
 $tips.Location = New-Object System.Drawing.Point(14, 26)
-$tips.Size = New-Object System.Drawing.Size(346, 100)
+$tips.Size = New-Object System.Drawing.Size(346, 40)
 $tips.ForeColor = [System.Drawing.Color]::FromArgb(170, 180, 190)
 $tips.Text = @"
 - ปิด FiveM ก่อนใช้งาน
 - ล้างแคชช่วยแก้ปัญหาเข้าเซิร์ฟ/โหลดช้า/เด้งบางกรณี
 - ถ้าตัวเลือกบางอย่างทำไม่ได้ ให้คลิกขวาไฟล์ .ps1 แล้วเลือก Run as administrator
+- ถ้าเลือกปรับ Registry แนะนำรีสตาร์ต 1 ครั้ง
 "@
 
 $grpLog = New-Object System.Windows.Forms.GroupBox
@@ -508,8 +690,26 @@ $btnStart.Add_Click({
             Set-HighPerformancePowerPlan -LogBox $txtLog
         }
 
+        if ($chkRegistryTweaks.Checked) {
+            Write-Log -LogBox $txtLog -Level "INFO" -Message "กำลังปรับ Registry..."
+            $okReg = Set-RegistryTweaksForFiveM -LogBox $txtLog
+            if (-not $okReg) {
+                Write-Log -LogBox $txtLog -Level "WARN" -Message "ปรับ Registry ไม่สำเร็จ/ถูกข้าม (ลองรันแบบแอดมิน)"
+            }
+        }
+
+        if ($chkSvcHostReduceProc.Checked) {
+            Write-Log -LogBox $txtLog -Level "INFO" -Message "กำลังลดจำนวน Process (svchost) ตาม RAM..."
+            $okSvc = Set-SvcHostSplitThresholdInKB -LogBox $txtLog
+            if (-not $okSvc) {
+                Write-Log -LogBox $txtLog -Level "WARN" -Message "ลด Process ไม่สำเร็จ/ถูกข้าม (ลองรันแบบแอดมิน)"
+            }
+        }
+
         Write-Log -LogBox $txtLog -Level "OK" -Message "เสร็จแล้ว"
-        [System.Windows.Forms.MessageBox]::Show("เสร็จแล้ว! แนะนำให้เปิด FiveM ใหม่อีกครั้ง", "FiveM Debloat", "OK", "Information") | Out-Null
+        $msg = "เสร็จแล้ว! แนะนำให้เปิด FiveM ใหม่อีกครั้ง"
+        if ($chkRegistryTweaks.Checked -or $chkSvcHostReduceProc.Checked) { $msg += "`n`nหมายเหตุ: ถ้าเลือกปรับ Registry/ลด Process แนะนำรีสตาร์ตเครื่อง 1 ครั้ง" }
+        [System.Windows.Forms.MessageBox]::Show($msg, "FiveM Debloat", "OK", "Information") | Out-Null
     } catch {
         Write-Log -LogBox $txtLog -Level "ERR" -Message "เกิดข้อผิดพลาดไม่คาดคิด: $($_.Exception.Message)"
         [System.Windows.Forms.MessageBox]::Show("เกิดข้อผิดพลาด: $($_.Exception.Message)", "FiveM Debloat", "OK", "Error") | Out-Null
@@ -526,6 +726,9 @@ $grpActions.Controls.AddRange(@(
     $lblGpu,
     $chkDisableGameBar,
     $chkHighPerf,
+    $chkRegistryTweaks,
+    $chkSvcHostReduceProc,
+    $lblSvcHostHint,
     $lblCitizenFx,
     $txtCitizenFx
 ))
@@ -542,4 +745,3 @@ Write-Log -LogBox $txtLog -Level "INFO" -Message "พร้อมใช้งา
 Write-Log -LogBox $txtLog -Level "INFO" -Message "หมายเหตุ: ปิด FiveM ก่อนกดเริ่มทำงาน"
 
 [void]$form.ShowDialog()
-
