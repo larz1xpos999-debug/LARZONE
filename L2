@@ -1,436 +1,680 @@
-# LARZ1 Debloat v0.2
-# Windows 11/10 - GUI debloat + service manager
-# Safe-by-default: Default mode does NOT blindly disable core Windows services.
-# Run as Administrator.
-
 #requires -version 5.1
+<#
+ LARZ1 Debloat v0.3
+ Dark GUI / Windows 10-11
+ - LARZ1 DEFAULT / WINDOWS 11 DEFAULT / SAFE / GAMING / AGGRESSIVE
+ - App removal, Services, Registry, Privacy, Windows, Gaming, Network
+ - Per-machine service baseline + backup
+ - Restore point safety gate
+ - Restore Last Backup
+ - Mouse wheel scrolling
+ - No third-party modules
+#>
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
-# -----------------------------
-# Elevation
-# -----------------------------
-$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
-    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    $psi.Verb = "runas"
-    try { [Diagnostics.Process]::Start($psi) | Out-Null } catch {}
+# ---------- Admin ----------
+$me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    $p = New-Object System.Diagnostics.ProcessStartInfo
+    $p.FileName = "powershell.exe"
+    $p.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    $p.Verb = "runas"
+    try { [Diagnostics.Process]::Start($p) | Out-Null } catch {}
     exit
 }
 
-# -----------------------------
-# Theme
-# -----------------------------
-$BG      = [Drawing.Color]::FromArgb(18,18,18)
-$CARD    = [Drawing.Color]::FromArgb(27,27,27)
-$CARD2   = [Drawing.Color]::FromArgb(34,34,34)
-$FG      = [Drawing.Color]::WhiteSmoke
-$MUTED   = [Drawing.Color]::FromArgb(165,165,165)
-$ACCENT  = [Drawing.Color]::FromArgb(0,160,255)
+$ErrorActionPreference = "Continue"
+$Root = Join-Path $env:ProgramData "LARZ1\Debloat"
+$BackupRoot = Join-Path $Root "Backups"
+New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
 
-function New-Label($text,$x,$y,$w,$h,$size=10,$color=$FG) {
+# ---------- Theme ----------
+$C = @{
+    bg     = [Drawing.Color]::FromArgb(5,7,9)
+    panel  = [Drawing.Color]::FromArgb(9,13,17)
+    card   = [Drawing.Color]::FromArgb(12,18,23)
+    card2  = [Drawing.Color]::FromArgb(17,24,30)
+    line   = [Drawing.Color]::FromArgb(37,51,61)
+    white  = [Drawing.Color]::FromArgb(239,244,248)
+    muted  = [Drawing.Color]::FromArgb(145,158,168)
+    blue   = [Drawing.Color]::FromArgb(70,174,255)
+    green  = [Drawing.Color]::FromArgb(67,210,145)
+    yellow = [Drawing.Color]::FromArgb(240,190,65)
+    red    = [Drawing.Color]::FromArgb(240,90,95)
+}
+
+$Font = "Segoe UI"
+
+# ---------- Data ----------
+$Apps = @(
+    [pscustomobject]@{Name="Microsoft.XboxApp"; Display="Xbox"; Desc="Xbox และบริการ Xbox"; Risk="Recommended"},
+    [pscustomobject]@{Name="Microsoft.XboxGamingOverlay"; Display="Xbox Game Bar"; Desc="Overlay สำหรับเกม"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.XboxIdentityProvider"; Display="Xbox Identity Provider"; Desc="ส่วนประกอบ Xbox"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.XboxSpeechToTextOverlay"; Display="Xbox Speech"; Desc="เสียง/Overlay Xbox"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.BingNews"; Display="Bing News"; Desc="ข่าวและวิดเจ็ต"; Risk="Recommended"},
+    [pscustomobject]@{Name="Microsoft.BingWeather"; Display="Bing Weather"; Desc="สภาพอากาศ"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.MicrosoftSolitaireCollection"; Display="Solitaire"; Desc="เกมที่มากับ Windows"; Risk="Optional"},
+    [pscustomobject]@{Name="Clipchamp.Clipchamp"; Display="Clipchamp"; Desc="โปรแกรมตัดต่อวิดีโอ"; Risk="Recommended"},
+    [pscustomobject]@{Name="Microsoft.GetHelp"; Display="Get Help"; Desc="แอปช่วยเหลือ"; Risk="Recommended"},
+    [pscustomobject]@{Name="Microsoft.Getstarted"; Display="Get Started"; Desc="คู่มือเริ่มต้น"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.MicrosoftOfficeHub"; Display="Microsoft 365"; Desc="Office Hub"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.People"; Display="People"; Desc="รายชื่อผู้ติดต่อ"; Risk="Optional"},
+    [pscustomobject]@{Name="Microsoft.WindowsFeedbackHub"; Display="Feedback Hub"; Desc="ส่ง Feedback ให้ Microsoft"; Risk="Optional"},
+    [pscustomobject]@{Name="MicrosoftTeams"; Display="Teams"; Desc="Microsoft Teams"; Risk="Optional"},
+    [pscustomobject]@{Name="MSTeams"; Display="Teams (new)"; Desc="Microsoft Teams รุ่นใหม่"; Risk="Optional"}
+)
+
+$Services = @(
+    # Name / display / category / safe / gaming / aggressive
+    @("XboxGipSvc","Xbox Accessory Management","Gaming","Manual","Disabled","Disabled"),
+    @("XblAuthManager","Xbox Live Auth Manager","Gaming","Manual","Disabled","Disabled"),
+    @("XblGameSave","Xbox Live Game Save","Gaming","Manual","Disabled","Disabled"),
+    @("XboxNetApiSvc","Xbox Live Networking Service","Gaming","Manual","Disabled","Disabled"),
+    @("DiagTrack","Connected User Experiences and Telemetry","Privacy","Manual","Manual","Disabled"),
+    @("dmwappushservice","Device Management WAP Push","Privacy","Manual","Manual","Disabled"),
+    @("WerSvc","Windows Error Reporting","Privacy","Manual","Manual","Manual"),
+    @("MapsBroker","Downloaded Maps Manager","Optional","Manual","Manual","Disabled"),
+    @("lfsvc","Geolocation Service","Optional","Manual","Manual","Disabled"),
+    @("PhoneSvc","Phone Service","Optional","Manual","Manual","Disabled"),
+    @("Fax","Fax","Optional","Manual","Manual","Disabled"),
+    @("WMPNetworkSvc","Windows Media Player Network Sharing","Optional","Manual","Manual","Disabled"),
+    @("RetailDemo","Retail Demo Service","Optional","Manual","Manual","Disabled"),
+    @("SCardSvr","Smart Card","Optional","Manual","Manual","Disabled"),
+    @("TapiSrv","Telephony","Optional","Manual","Manual","Disabled"),
+    @("WSearch","Windows Search","Performance","Automatic","Manual","Manual"),
+    @("Spooler","Print Spooler","Performance","Automatic","Manual","Manual"),
+    @("TermService","Remote Desktop Services","Remote","Manual","Manual","Disabled"),
+    @("RemoteRegistry","Remote Registry","Remote","Disabled","Disabled","Disabled"),
+    @("SSDPSRV","SSDP Discovery","Network","Manual","Manual","Disabled"),
+    @("upnphost","UPnP Device Host","Network","Manual","Manual","Disabled"),
+    @("FDResPub","Function Discovery Resource Publication","Network","Manual","Manual","Disabled"),
+    @("fdPHost","Function Discovery Provider Host","Network","Manual","Manual","Disabled"),
+    @("SharedAccess","Internet Connection Sharing","Network","Manual","Manual","Disabled"),
+    @("icssvc","Windows Mobile Hotspot Service","Network","Manual","Manual","Disabled"),
+    @("TabletInputService","Touch Keyboard and Handwriting Panel","Optional","Manual","Manual","Manual"),
+    @("WalletService","Wallet Service","Optional","Manual","Manual","Disabled")
+)
+
+$Protected = @(
+    "RpcSs","RpcEptMapper","DcomLaunch","PlugPlay","Power","EventLog","Winmgmt",
+    "Schedule","ProfSvc","SamSs","LSM","BFE","MpsSvc","Dhcp","Dnscache","NlaSvc",
+    "LanmanWorkstation","LanmanServer","CryptSvc","wuauserv","bits","WinDefend",
+    "SecurityHealthService","CoreMessagingRegistrar","BrokerInfrastructure",
+    "AppXSvc","StateRepository","UserManager","TokenBroker","Winlogon","Wininit",
+    "UserProfileService","AudioSrv","AudioEndpointBuilder","Display","TimeBrokerSvc",
+    "DoSvc","UsoSvc","WaaSMedicSvc","TrustedInstaller"
+)
+
+# ---------- Helpers ----------
+function Label($text,$x,$y,$w,$h,$size=10,$color=$C.white) {
     $l = New-Object Windows.Forms.Label
     $l.Text=$text; $l.Location=New-Object Drawing.Point($x,$y)
-    $l.Size=New-Object Drawing.Size($w,$h); $l.ForeColor=$color
-    $l.BackColor=[Drawing.Color]::Transparent
-    $l.Font=New-Object Drawing.Font("Segoe UI",$size)
+    $l.Size=New-Object Drawing.Size($w,$h)
+    $l.Font=New-Object Drawing.Font($Font,$size)
+    $l.ForeColor=$color; $l.BackColor=[Drawing.Color]::Transparent
     return $l
 }
-
-function Add-Log($text) {
-    if ($script:logBox) {
-        $script:logBox.AppendText("[$(Get-Date -Format HH:mm:ss)] $text`r`n")
-        $script:logBox.SelectionStart=$script:logBox.TextLength
-        $script:logBox.ScrollToCaret()
+function Button($text,$x,$y,$w,$h) {
+    $b=New-Object Windows.Forms.Button
+    $b.Text=$text; $b.Location=New-Object Drawing.Point($x,$y)
+    $b.Size=New-Object Drawing.Size($w,$h)
+    $b.FlatStyle="Flat"; $b.FlatAppearance.BorderColor=$C.line
+    $b.BackColor=$C.card2; $b.ForeColor=$C.white
+    $b.Font=New-Object Drawing.Font($Font,9,[Drawing.FontStyle]::Regular)
+    $b.Cursor=[Windows.Forms.Cursors]::Hand
+    return $b
+}
+function AddLog($s) {
+    if($script:LogBox){
+        $script:LogBox.AppendText("[$(Get-Date -Format HH:mm:ss)] $s`r`n")
+        $script:LogBox.SelectionStart=$script:LogBox.TextLength
+        $script:LogBox.ScrollToCaret()
     }
 }
-
-function Set-Progress($n,$text) {
-    $script:progress.Value=[Math]::Max(0,[Math]::Min(100,[int]$n))
-    $script:status.Text=$text
+function SetStatus($s,$pct=-1) {
+    if($script:StatusLabel){$script:StatusLabel.Text=$s}
+    if($pct -ge 0 -and $script:Progress){$script:Progress.Value=[Math]::Min(100,[Math]::Max(0,$pct))}
     [Windows.Forms.Application]::DoEvents()
 }
-
-function Add-RestorePoint {
+function Mode($name) {
+    try {
+        $x=Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction Stop
+        switch($x.StartMode){"Auto"{"Automatic";break}"Manual"{"Manual";break}"Disabled"{"Disabled";break}default{$x.StartMode}}
+    } catch {"Not Installed"}
+}
+function State($name) {
+    try {(Get-Service -Name $name -ErrorAction Stop).Status.ToString()} catch {"Not Installed"}
+}
+function SetMode($name,$mode) {
+    if($Protected -contains $name){AddLog "SKIP protected: $name";return $false}
+    try {
+        $svc=Get-Service -Name $name -ErrorAction Stop
+        Set-Service -Name $name -StartupType $mode -ErrorAction Stop
+        if($mode -eq "Disabled" -and $svc.Status -eq "Running"){Stop-Service -Name $name -Force -ErrorAction SilentlyContinue}
+        AddLog "$name -> $mode"
+        return $true
+    } catch {AddLog "FAILED $name : $($_.Exception.Message)";return $false}
+}
+function RestorePoint {
     try {
         Enable-ComputerRestore -Drive "$($env:SystemDrive)\" -ErrorAction SilentlyContinue
-        Checkpoint-Computer -Description "LARZ1 Debloat v0.2" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
-        Add-Log "Restore point created."
-    } catch {
-        Add-Log "Restore point unavailable: $($_.Exception.Message)"
+        Checkpoint-Computer -Description "LARZ1 Debloat" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+        AddLog "Restore Point created"; return $true
+    } catch {AddLog "Restore Point unavailable"; return $false}
+}
+function BackupServices {
+    $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+    $dir=Join-Path $BackupRoot $stamp
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $rows=@()
+    foreach($s in $Services){
+        $n=$s[0]; $m=Mode $n
+        if($m -ne "Not Installed"){$rows += [pscustomobject]@{Name=$n;Mode=$m;State=(State $n)}}
+    }
+    $rows | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $dir "services.json") -Encoding UTF8
+    AddLog "Service backup: $dir"
+    return $dir
+}
+function BackupRegistry {
+    $stamp=Get-Date -Format "yyyyMMdd_HHmmss"
+    $dir=Join-Path $BackupRoot $stamp
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $keys=@(
+      "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager",
+      "HKCU\Software\Microsoft\Windows\CurrentVersion\GameConfigStore",
+      "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR",
+      "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
+      "HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
+      "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR"
+    )
+    foreach($k in $keys){
+        $f=Join-Path $dir (($k -replace '[\\:]','_')+".reg")
+        & reg.exe export $k $f /y 2>$null | Out-Null
+    }
+    AddLog "Registry backup: $dir"
+}
+function Prepare {
+    if($script:RequireRestore.Checked){
+        if(-not (RestorePoint)){
+            [Windows.Forms.MessageBox]::Show("Restore Point สร้างไม่ได้ จึงยกเลิกการเปลี่ยนแปลง","LARZ1 Safety Gate",[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Error)|Out-Null
+            return $false
+        }
+    } else { RestorePoint | Out-Null }
+    BackupServices | Out-Null
+    BackupRegistry
+    return $true
+}
+
+# ---------- Registry tweaks ----------
+function RegDword($path,$name,$value) {
+    try{
+        if(-not(Test-Path $path)){New-Item $path -Force|Out-Null}
+        New-ItemProperty $path $name -PropertyType DWord -Value $value -Force|Out-Null
+        AddLog "Registry $name = $value"
+    }catch{AddLog "Registry FAILED: $name"}
+}
+function PrivacyTweaks {
+    $p="HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+    foreach($n in @("ContentDeliveryAllowed","OemPreInstalledAppsEnabled","PreInstalledAppsEnabled","PreInstalledAppsEverEnabled","SilentInstalledAppsEnabled","SystemPaneSuggestionsEnabled","SubscribedContent-338388Enabled","SubscribedContent-353694Enabled")){RegDword $p $n 0}
+    RegDword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" 0
+}
+function GameTweaks {
+    RegDword "HKCU:\System\GameConfigStore" "GameDVR_Enabled" 0
+    RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" 0
+    RegDword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" "AllowGameDVR" 0
+}
+function WindowsTweaks {
+    RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" 0
+    RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowTaskViewButton" 1
+}
+function NetworkTweaks {
+    RegDword "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" "Tcp1323Opts" 1
+}
+
+# ---------- App removal ----------
+function RemoveApp($pattern) {
+    try{
+        $pkgs=Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue
+        if(-not $pkgs){AddLog "App not installed: $pattern";return}
+        foreach($p in $pkgs){
+            try{
+                Remove-AppxPackage -Package $p.PackageFullName -AllUsers -ErrorAction Stop
+                AddLog "Removed: $pattern"
+            }catch{AddLog "App remove failed: $pattern"}
+        }
+    }catch{AddLog "App query failed: $pattern"}
+}
+
+# ---------- GUI ----------
+$form=New-Object Windows.Forms.Form
+$form.Text="LARZ1 Debloat"
+$form.Size=New-Object Drawing.Size(1540,950)
+$form.MinimumSize=New-Object Drawing.Size(1180,760)
+$form.StartPosition="CenterScreen"
+$form.BackColor=$C.bg
+$form.ForeColor=$C.white
+$form.Font=New-Object Drawing.Font($Font,10)
+$form.FormBorderStyle="Sizable"
+
+# Optional LARZ1 wallpaper: put LARZ1-background.jpg or .png beside this PS1.
+# The UI remains fully usable if the image is absent.
+$wallpaper = $null
+foreach($candidate in @(
+    (Join-Path $PSScriptRoot "LARZ1-background.jpg"),
+    (Join-Path $PSScriptRoot "LARZ1-background.png")
+)){
+    if(Test-Path $candidate){
+        try { $wallpaper=[Drawing.Image]::FromFile($candidate); break } catch {}
     }
 }
-
-# -----------------------------
-# Service database
-# StartType values: Automatic / Manual / Disabled
-# Default = Windows default intended for a normal installation.
-# These are conservative and intentionally exclude critical services.
-# -----------------------------
-$Services = @(
-    # Gaming / Xbox optional components
-    [pscustomobject]@{Name='XboxGipSvc';       Display='Xbox Accessory Management'; Category='Gaming'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='XblAuthManager';   Display='Xbox Live Auth Manager';     Category='Gaming'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='XblGameSave';      Display='Xbox Live Game Save';        Category='Gaming'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='XboxNetApiSvc';    Display='Xbox Live Networking';       Category='Gaming'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-
-    # Optional Windows features
-    [pscustomobject]@{Name='MapsBroker';       Display='Downloaded Maps Manager';     Category='Optional'; Default='Automatic'; Safe='Manual'; Gaming='Manual'},
-    [pscustomobject]@{Name='lfsvc';            Display='Geolocation Service';         Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='PhoneSvc';         Display='Phone Service';              Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='Fax';              Display='Fax';                        Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='WMPNetworkSvc';    Display='Windows Media Player Sharing';Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='RetailDemo';       Display='Retail Demo Service';         Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-
-    # Telemetry / diagnostics
-    [pscustomobject]@{Name='DiagTrack';        Display='Connected User Experiences & Telemetry'; Category='Privacy'; Default='Automatic'; Safe='Manual'; Gaming='Manual'},
-    [pscustomobject]@{Name='dmwappushservice';  Display='Device Management Wireless Application Protocol'; Category='Privacy'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='WerSvc';           Display='Windows Error Reporting';      Category='Privacy'; Default='Manual'; Safe='Manual'; Gaming='Manual'},
-
-    # Search / indexing: keep default by default because disabling can hurt normal Windows use
-    [pscustomobject]@{Name='WSearch';          Display='Windows Search';              Category='Performance'; Default='Automatic'; Safe='Manual'; Gaming='Manual'},
-
-    # Printing / smart card / remote access - optional, not part of core default
-    [pscustomobject]@{Name='Spooler';          Display='Print Spooler';               Category='Optional'; Default='Automatic'; Safe='Manual'; Gaming='Manual'},
-    [pscustomobject]@{Name='SCardSvr';         Display='Smart Card';                  Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='TermService';      Display='Remote Desktop Services';     Category='Remote';   Default='Manual'; Safe='Manual'; Gaming='Manual'},
-    [pscustomobject]@{Name='RemoteRegistry';   Display='Remote Registry';             Category='Remote';   Default='Disabled'; Safe='Disabled'; Gaming='Disabled'},
-
-    # Legacy / discovery services
-    [pscustomobject]@{Name='SSDPSRV';          Display='SSDP Discovery';              Category='Network';  Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='upnphost';         Display='UPnP Device Host';            Category='Network';  Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='FDResPub';         Display='Function Discovery Resource Publication'; Category='Network'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='fdPHost';          Display='Function Discovery Provider Host'; Category='Network'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-
-    # Compatibility / legacy
-    [pscustomobject]@{Name='TapiSrv';          Display='Telephony';                  Category='Optional'; Default='Manual'; Safe='Disabled'; Gaming='Disabled'},
-    [pscustomobject]@{Name='SharedAccess';     Display='Internet Connection Sharing'; Category='Network'; Default='Manual'; Safe='Manual'; Gaming='Manual'},
-    [pscustomobject]@{Name='icssvc';           Display='Windows Mobile Hotspot';      Category='Network';  Default='Manual'; Safe='Disabled'; Gaming='Disabled'}
-)
-
-# Services that must NEVER be touched by this tool.
-$ProtectedServices = @(
-    'RpcSs','RpcEptMapper','DcomLaunch','PlugPlay','Power','EventLog','Winmgmt',
-    'Schedule','ProfSvc','SamSs','LSM','BFE','MpsSvc','Dhcp','Dnscache','NlaSvc',
-    'LanmanWorkstation','LanmanServer','CryptSvc','wuauserv','bits','WinDefend',
-    'SecurityHealthService','CoreMessagingRegistrar','BrokerInfrastructure',
-    'AppXSvc','StateRepository','UserManager','TokenBroker','Winlogon','Wininit',
-    'UserProfileService','AudioSrv','Audiosrv','AudioEndpointBuilder','Display',
-    'TimeBrokerSvc','BrokerInfrastructure'
-)
-
-function Get-ServiceStartMode($name) {
-    try {
-        $svc = Get-CimInstance Win32_Service -Filter "Name='$name'" -ErrorAction Stop
-        switch ($svc.StartMode) {
-            'Auto' { return 'Automatic' }
-            'Manual' { return 'Manual' }
-            'Disabled' { return 'Disabled' }
-            default { return $svc.StartMode }
-        }
-    } catch { return 'N/A' }
+if($wallpaper){
+    $form.BackgroundImage=$wallpaper
+    $form.BackgroundImageLayout=[Windows.Forms.ImageLayout]::Stretch
 }
 
-function Set-ServiceMode($name,$mode) {
-    if ($ProtectedServices -contains $name) {
-        Add-Log "SKIP protected service: $name"
+# Header
+$header=New-Object Windows.Forms.Panel
+$header.Dock="Top";$header.Height=100;$header.BackColor=$C.panel
+$form.Controls.Add($header)
+$header.Controls.Add((Label "L7  LARZ1" 24 12 350 45 27 $C.white))
+$header.Controls.Add((Label "DEBLOAT" 390 18 260 32 21 $C.white))
+$header.Controls.Add((Label "WINDOWS OPTIMIZATION TOOL" 392 52 360 22 9 $C.muted))
+$header.Controls.Add((Label "B E T T E R   P C   B E T T E R   G A M E" 1010 34 420 22 9 $C.white))
+$header.Controls.Add((Label "LARZ1 Debloat v0.3" 1260 63 230 20 9 $C.muted))
+
+# Sidebar
+$side=New-Object Windows.Forms.Panel
+$side.Dock="Left";$side.Width=190;$side.BackColor=$C.panel
+$form.Controls.Add($side)
+
+$navNames=@("⌂  หน้าหลัก","▱  Debloat","⚙  Services","◇  Registry","♢  Privacy","🎮  Gaming","⊞  Windows","⌁  Network","▦  Apps","↶  Restore","⚙  ตั้งค่า")
+$nav=@()
+for($i=0;$i -lt $navNames.Count;$i++){
+    $b=Button $navNames[$i] 14 (18+$i*55) 160 43
+    if($i -eq 0){$b.BackColor=$C.card2;$b.FlatAppearance.BorderColor=$C.blue}
+    $side.Controls.Add($b);$nav += $b
+}
+$side.Controls.Add((Label "LARZ1" 35 690 110 25 12 $C.white))
+$side.Controls.Add((Label "Make Windows Faster" 28 718 140 22 8 $C.muted))
+
+# Main
+$main=New-Object Windows.Forms.Panel
+$main.Dock="Fill";$main.BackColor=$C.bg
+$form.Controls.Add($main)
+
+# Profile cards
+$profilePanel=New-Object Windows.Forms.Panel
+$profilePanel.Location=New-Object Drawing.Point(18,16)
+$profilePanel.Size=New-Object Drawing.Size(920,130)
+$profilePanel.BackColor=$C.bg
+$main.Controls.Add($profilePanel)
+
+$profiles=@(
+    @("LARZ1 DEFAULT","ปรับแต่งแนะนำจาก LARZ1","LARZ1"),
+    @("WINDOWS 11 DEFAULT","คืนค่าตาม baseline เครื่อง","BASELINE"),
+    @("SAFE","ปลอดภัย ใช้งานทั่วไป","SAFE"),
+    @("GAMING","เน้นเกม / ลดงานเบื้องหลัง","GAMING"),
+    @("AGGRESSIVE","ปิดบริการที่ไม่จำเป็นมากขึ้น","AGGRESSIVE")
+)
+$profileButtons=@{}
+for($i=0;$i -lt $profiles.Count;$i++){
+    $x=$i*180
+    $p=New-Object Windows.Forms.Panel
+    $p.Location=New-Object Drawing.Point($x,0);$p.Size=New-Object Drawing.Size(170,112)
+    $p.BackColor=if($i -eq 0){$C.card2}else{$C.card}
+    $p.BorderStyle="FixedSingle"
+    $profilePanel.Controls.Add($p)
+    $p.Controls.Add((Label $profiles[$i][0] 12 16 145 25 11 $C.white))
+    $p.Controls.Add((Label $profiles[$i][1] 12 44 145 35 8 $C.muted))
+    $b=Button "เลือกใช้งาน" 12 80 145 25
+    $b.Tag=$profiles[$i][2]
+    $p.Controls.Add($b)
+    $profileButtons[$profiles[$i][2]]=$b
+}
+
+# System info
+$info=New-Object Windows.Forms.Panel
+$info.Location=New-Object Drawing.Point(960,16);$info.Size=New-Object Drawing.Size(500,130)
+$info.BackColor=$C.card;$info.BorderStyle="FixedSingle"
+$main.Controls.Add($info)
+$info.Controls.Add((Label "ข้อมูลระบบ" 18 12 150 25 12 $C.white))
+$os=(Get-CimInstance Win32_OperatingSystem).Caption
+$cpu=(Get-CimInstance Win32_Processor | Select-Object -First 1).Name
+$ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)
+$info.Controls.Add((Label "OS   $os" 18 42 450 20 9 $C.muted))
+$info.Controls.Add((Label "CPU  $cpu" 18 64 450 20 9 $C.muted))
+$info.Controls.Add((Label "RAM  $ram GB" 18 86 450 20 9 $C.muted))
+
+# Tabs
+$tabs=New-Object Windows.Forms.TabControl
+$tabs.Location=New-Object Drawing.Point(18,158);$tabs.Size=New-Object Drawing.Size(940,500)
+$tabs.Appearance="Normal";$tabs.BackColor=$C.panel;$tabs.ForeColor=$C.white
+$main.Controls.Add($tabs)
+
+$tabNames=@("Apps","Services","Registry","Privacy","Windows","Gaming","Network")
+foreach($tn in $tabNames){
+    $tp=New-Object Windows.Forms.TabPage
+    $tp.Text=$tn;$tp.BackColor=$C.panel;$tp.ForeColor=$C.white
+    $tabs.TabPages.Add($tp)
+}
+
+# Apps tab
+$appPage=$tabs.TabPages[0]
+$appSearch=New-Object Windows.Forms.TextBox
+$appSearch.Location=New-Object Drawing.Point(15,15);$appSearch.Size=New-Object Drawing.Size(610,32)
+$appSearch.BackColor=$C.card2;$appSearch.ForeColor=$C.white;$appSearch.BorderStyle="FixedSingle"
+# PlaceholderText is not used: this script targets Windows PowerShell 5.1
+$appPage.Controls.Add($appSearch)
+$appSelect=Button "เลือกทั้งหมด" 640 15 120 32
+$appClear=Button "ยกเลิกทั้งหมด" 770 15 130 32
+$appPage.Controls.Add($appSelect);$appPage.Controls.Add($appClear)
+
+$appScroll=New-Object Windows.Forms.Panel
+$appScroll.Location=New-Object Drawing.Point(15,60);$appScroll.Size=New-Object Drawing.Size(885,370)
+$appScroll.AutoScroll=$true;$appScroll.BackColor=$C.card
+$appPage.Controls.Add($appScroll)
+
+$appChecks=@()
+for($i=0;$i -lt $Apps.Count;$i++){
+    $a=$Apps[$i]
+    $cb=New-Object Windows.Forms.CheckBox
+    $cb.Text="$($a.Display)   —   $($a.Desc)"
+    $cb.Tag=$a.Name
+    $cb.Location=New-Object Drawing.Point(12,(12+$i*43))
+    $cb.Size=New-Object Drawing.Size(830,36)
+    $cb.ForeColor=$C.white;$cb.BackColor=$C.card
+    $cb.Font=New-Object Drawing.Font($Font,9)
+    $cb.Checked=$true
+    $appScroll.Controls.Add($cb);$appChecks+=$cb
+}
+$appSelect.Add_Click({foreach($c in $appChecks){$c.Checked=$true}})
+$appClear.Add_Click({foreach($c in $appChecks){$c.Checked=$false}})
+
+# Services tab
+$svcPage=$tabs.TabPages[1]
+$svcSearch=New-Object Windows.Forms.TextBox
+$svcSearch.Location=New-Object Drawing.Point(15,15);$svcSearch.Size=New-Object Drawing.Size(610,32)
+$svcSearch.BackColor=$C.card2;$svcSearch.ForeColor=$C.white;$svcSearch.BorderStyle="FixedSingle"
+# PlaceholderText is not used: this script targets Windows PowerShell 5.1
+$svcPage.Controls.Add($svcSearch)
+$svcSelect=Button "เลือกทั้งหมด" 640 15 120 32
+$svcClear=Button "ยกเลิกทั้งหมด" 770 15 130 32
+$svcPage.Controls.Add($svcSelect);$svcPage.Controls.Add($svcClear)
+$svcScroll=New-Object Windows.Forms.Panel
+$svcScroll.Location=New-Object Drawing.Point(15,60);$svcScroll.Size=New-Object Drawing.Size(885,370)
+$svcScroll.AutoScroll=$true;$svcScroll.BackColor=$C.card
+$svcPage.Controls.Add($svcScroll)
+
+$svcRows=@()
+for($i=0;$i -lt $Services.Count;$i++){
+    $s=$Services[$i]
+    $p=New-Object Windows.Forms.Panel
+    $p.Location=New-Object Drawing.Point(6,(6+$i*39));$p.Size=New-Object Drawing.Size(850,35)
+    $p.BackColor=$C.card
+    $cb=New-Object Windows.Forms.CheckBox
+    $cb.Location=New-Object Drawing.Point(5,7);$cb.Size=New-Object Drawing.Size(25,22);$cb.Checked=$true
+    $cb.Tag=$s
+    $p.Controls.Add($cb)
+    $p.Controls.Add((Label $s[1] 35 3 390 28 9 $C.white))
+    $cur=Label ("Current: "+(Mode $s[0])) 430 3 180 28 8 $C.yellow
+    $p.Controls.Add($cur)
+    $target=Label ("LARZ1: "+$s[3]) 610 3 170 28 8 $C.green
+    $p.Controls.Add($target)
+    $svcScroll.Controls.Add($p)
+    $svcRows += [pscustomobject]@{Panel=$p;Check=$cb;Current=$cur;Target=$target;Data=$s}
+}
+$svcSelect.Add_Click({foreach($r in $svcRows){$r.Check.Checked=$true}})
+$svcClear.Add_Click({foreach($r in $svcRows){$r.Check.Checked=$false}})
+
+# Generic option tabs
+function AddOptions($page,$items){
+    $y=18
+    $checks=@()
+    foreach($it in $items){
+        $cb=New-Object Windows.Forms.CheckBox
+        $cb.Text=$it[0]+"  —  "+$it[1]
+        $cb.Tag=$it[2]
+        $cb.Checked=$it[3]
+        $cb.Location=New-Object Drawing.Point(20,$y)
+        $cb.Size=New-Object Drawing.Size(850,38)
+        $cb.ForeColor=$C.white;$cb.BackColor=$C.card
+        $page.Controls.Add($cb);$checks+=$cb;$y+=45
+    }
+    return $checks
+}
+$registryChecks=AddOptions $tabs.TabPages[2] @(
+    @("Hide known file extensions","แสดงนามสกุลไฟล์", "ext", $false),
+    @("Show Task View button","แสดงปุ่ม Task View", "taskview", $true)
+)
+$privacyChecks=AddOptions $tabs.TabPages[3] @(
+    @("Disable consumer suggestions","ลดคำแนะนำ/แอปโปรโมต", "consumer", $true),
+    @("Telemetry policy","ตั้งค่า telemetry policy เป็น 0 ถ้าระบบรองรับ", "telemetry", $false),
+    @("Windows Error Reporting","ตั้ง service เป็น Manual", "wer", $true)
+)
+$windowsChecks=AddOptions $tabs.TabPages[4] @(
+    @("Show file extensions","แสดง .exe/.txt/.zip ฯลฯ", "extensions", $true),
+    @("Keep Task View","ไม่ซ่อน Task View", "taskview", $true)
+)
+$gamingChecks=AddOptions $tabs.TabPages[5] @(
+    @("Disable Game DVR / capture","ลดงาน capture เบื้องหลัง", "gamedvr", $true),
+    @("Gaming service profile","ใช้ค่า Gaming กับ service ที่เลือก", "gamingservices", $false)
+)
+$networkChecks=AddOptions $tabs.TabPages[6] @(
+    @("TCP timestamp option","เปิด Tcp1323Opts; ไม่รับประกัน ping/FPS", "tcp1323", $false)
+)
+
+# Right panel
+$right=New-Object Windows.Forms.Panel
+$right.Location=New-Object Drawing.Point(980,158);$right.Size=New-Object Drawing.Size(480,500)
+$right.BackColor=$C.card;$right.BorderStyle="FixedSingle"
+$main.Controls.Add($right)
+$right.Controls.Add((Label "รายละเอียดโปรไฟล์" 20 18 300 28 13 $C.white))
+$right.Controls.Add((Label "สิ่งที่จะทำ" 20 58 200 25 10 $C.muted))
+$right.Controls.Add((Label "✓ Services     28 รายการ" 30 90 350 25 10 $C.white))
+$right.Controls.Add((Label "✓ Registry      6 รายการ" 30 120 350 25 10 $C.white))
+$right.Controls.Add((Label "✓ Privacy       3 รายการ" 30 150 350 25 10 $C.white))
+$right.Controls.Add((Label "✓ Apps          เลือกได้" 30 180 350 25 10 $C.white))
+$right.Controls.Add((Label "✓ Restore Point ก่อนแก้ไข" 30 210 350 25 10 $C.green))
+$right.Controls.Add((Label "✓ Backup ก่อนแก้ไข" 30 240 350 25 10 $C.green))
+$right.Controls.Add((Label "Protected services จะไม่ถูกแตะ" 30 270 400 25 9 $C.yellow))
+
+$script:RequireRestore=New-Object Windows.Forms.CheckBox
+$script:RequireRestore.Text="ต้องสร้าง Restore Point สำเร็จก่อนจึงทำงาน"
+$script:RequireRestore.Checked=$true
+$script:RequireRestore.Location=New-Object Drawing.Point(20,310)
+$script:RequireRestore.Size=New-Object Drawing.Size(410,30)
+$script:RequireRestore.ForeColor=$C.white
+$right.Controls.Add($script:RequireRestore)
+
+$apply=Button "▶  เริ่มปรับแต่งที่เลือก" 20 355 440 52
+$apply.BackColor=$C.card2;$apply.FlatAppearance.BorderColor=$C.blue
+$right.Controls.Add($apply)
+
+$restore=Button "↶  RESTORE LAST BACKUP" 20 415 215 35
+$right.Controls.Add($restore)
+$refresh=Button "⟳  REFRESH" 245 415 215 35
+$right.Controls.Add($refresh)
+
+# Bottom log/progress
+$bottom=New-Object Windows.Forms.Panel
+$bottom.Location=New-Object Drawing.Point(18,670);$bottom.Size=New-Object Drawing.Size(1442,225)
+$bottom.BackColor=$C.bg
+$main.Controls.Add($bottom)
+
+$progressCard=New-Object Windows.Forms.Panel
+$progressCard.Location=New-Object Drawing.Point(0,0);$progressCard.Size=New-Object Drawing.Size(430,205)
+$progressCard.BackColor=$C.card;$progressCard.BorderStyle="FixedSingle"
+$bottom.Controls.Add($progressCard)
+$progressCard.Controls.Add((Label "กำลังดำเนินการ..." 20 20 250 25 12 $C.white))
+$script:Progress=New-Object Windows.Forms.ProgressBar
+$script:Progress.Location=New-Object Drawing.Point(20,65);$script:Progress.Size=New-Object Drawing.Size(390,24)
+$script:Progress.Style="Continuous";$script:Progress.Value=0
+$progressCard.Controls.Add($script:Progress)
+$script:StatusLabel=Label "พร้อมใช้งาน" 20 105 390 25 9 $C.muted
+$progressCard.Controls.Add($script:StatusLabel)
+$progressCard.Controls.Add((Label "LARZ1 Debloat v0.3  |  Better PC Better Game" 20 155 390 25 8 $C.muted))
+
+$logCard=New-Object Windows.Forms.Panel
+$logCard.Location=New-Object Drawing.Point(445,0);$logCard.Size=New-Object Drawing.Size(997,205)
+$logCard.BackColor=$C.card;$logCard.BorderStyle="FixedSingle"
+$bottom.Controls.Add($logCard)
+$logCard.Controls.Add((Label "บันทึกการทำงาน (Log)" 18 15 300 25 11 $C.white))
+$script:LogBox=New-Object Windows.Forms.RichTextBox
+$script:LogBox.Location=New-Object Drawing.Point(18,48);$script:LogBox.Size=New-Object Drawing.Size(955,140)
+$script:LogBox.BackColor=$C.bg;$script:LogBox.ForeColor=$C.muted
+$script:LogBox.BorderStyle="FixedSingle";$script:LogBox.ReadOnly=$true
+$script:LogBox.Font=New-Object Drawing.Font("Consolas",9)
+$logCard.Controls.Add($script:LogBox)
+
+# ---------- Profile actions ----------
+function ApplyProfile($profile) {
+    if(-not (Prepare)){return}
+    $targets=@()
+    switch($profile){
+        "SAFE"       {$targets=@{safe=1}}
+        "GAMING"     {$targets=@{gaming=1}}
+        "AGGRESSIVE" {$targets=@{aggressive=1}}
+        "LARZ1"      {$targets=@{safe=1}}
+    }
+    $rows=$svcRows
+    $total=$rows.Count;$i=0
+    foreach($r in $rows){
+        $i++
+        $s=$r.Data
+        if($r.Check.Checked){
+            $mode = if($profile -eq "GAMING"){$s[4]}elseif($profile -eq "AGGRESSIVE"){$s[5]}else{$s[3]}
+            SetMode $s[0] $mode | Out-Null
+        }
+        SetStatus "Services $i/$total" ([int](($i/$total)*60))
+    }
+    if($profile -in @("LARZ1","SAFE","GAMING","AGGRESSIVE")){
+        PrivacyTweaks
+        GameTweaks
+        WindowsTweaks
+    }
+    SetStatus "เสร็จสิ้น" 100
+    AddLog "Profile $profile completed."
+    RefreshServices
+}
+function RefreshServices {
+    foreach($r in $svcRows){
+        $r.Current.Text="Current: "+(Mode $r.Data[0])
+        $r.Target.Text="LARZ1: "+$r.Data[3]
+    }
+}
+function RestoreLast {
+    $dirs=Get-ChildItem $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+    $file=$null
+    foreach($d in $dirs){
+        $candidate=Join-Path $d.FullName "services.json"
+        if(Test-Path $candidate){$file=$candidate;break}
+    }
+    if(-not $file){
+        [Windows.Forms.MessageBox]::Show("ไม่พบ service backup","LARZ1 Restore",[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information)|Out-Null
         return
     }
-    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-    if (-not $svc) { Add-Log "Not installed: $name"; return }
-
-    try {
-        Set-Service -Name $name -StartupType $mode -ErrorAction Stop
-        if ($mode -eq 'Disabled' -and $svc.Status -eq 'Running') {
-            Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+    if(-not (Confirm-Action "Restore" "จะคืนค่า StartupType ของ services จาก backup ล่าสุด`n`nดำเนินการต่อหรือไม่?")){return}
+    $rows=Get-Content $file -Raw | ConvertFrom-Json
+    $n=$rows.Count;$i=0
+    foreach($x in $rows){
+        $i++;SetMode $x.Name $x.Mode | Out-Null
+        SetStatus "Restoring $i/$n" ([int](($i/$n)*100))
+    }
+    SetStatus "Restore complete" 100
+    RefreshServices
+}
+function ApplySelected {
+    if(-not (Prepare)){return}
+    $svcTotal=($svcRows|Where-Object{$_.Check.Checked}).Count
+    $appTotal=($appChecks|Where-Object{$_.Checked}).Count
+    $total=[Math]::Max(1,$svcTotal+$appTotal+5);$i=0
+    foreach($r in $svcRows){
+        if($r.Check.Checked){
+            $i++;SetMode $r.Data[0] $r.Data[3]|Out-Null
+            SetStatus "Service $i/$total" ([int](($i/$total)*100))
         }
-        Add-Log "$name -> $mode"
-    } catch {
-        Add-Log "FAILED $name -> $mode : $($_.Exception.Message)"
     }
-}
-
-# -----------------------------
-# Registry helpers
-# -----------------------------
-function Set-RegDword($path,$name,$value) {
-    try {
-        if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
-        New-ItemProperty -Path $path -Name $name -PropertyType DWord -Value $value -Force | Out-Null
-        Add-Log "Registry: $name = $value"
-    } catch { Add-Log "Registry failed: $name" }
-}
-
-function Disable-ConsumerExperiences {
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "ContentDeliveryAllowed" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "OemPreInstalledAppsEnabled" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "PreInstalledAppsEnabled" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "PreInstalledAppsEverEnabled" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SilentInstalledAppsEnabled" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" "SystemPaneSuggestionsEnabled" 0
-}
-
-function Disable-GameDVR {
-    Set-RegDword "HKCU:\System\GameConfigStore" "GameDVR_Enabled" 0
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR" "AppCaptureEnabled" 0
-    Set-RegDword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" "AllowGameDVR" 0
-}
-
-function Disable-TelemetryPolicy {
-    Set-RegDword "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "AllowTelemetry" 0
-}
-
-function Disable-Suggestions {
-    Disable-ConsumerExperiences
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowTaskViewButton" 0
-}
-
-function Show-Extensions {
-    Set-RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" 0
-}
-
-# -----------------------------
-# App removal
-# -----------------------------
-$Apps = @(
-    'Microsoft.549981C3F5F10',       # Cortana
-    'Microsoft.BingNews',
-    'Microsoft.BingWeather',
-    'Microsoft.MicrosoftSolitaireCollection',
-    'Clipchamp.Clipchamp',
-    'Microsoft.GetHelp',
-    'Microsoft.Getstarted',
-    'Microsoft.MicrosoftOfficeHub',
-    'Microsoft.People',
-    'Microsoft.WindowsFeedbackHub',
-    'Microsoft.XboxApp',
-    'Microsoft.XboxGamingOverlay',
-    'Microsoft.XboxIdentityProvider',
-    'Microsoft.XboxSpeechToTextOverlay',
-    'MicrosoftTeams',
-    'MSTeams'
-)
-
-function Remove-AppSafe($pattern) {
-    try {
-        Get-AppxPackage -AllUsers -Name $pattern -ErrorAction SilentlyContinue |
-            ForEach-Object {
-                Add-Log "Removing Appx: $($_.Name)"
-                Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-            }
-    } catch { Add-Log "App removal skipped: $pattern" }
-}
-
-# -----------------------------
-# Default profile
-# -----------------------------
-function Apply-Windows11Default {
-    Add-Log "Applying LARZ1 DEFAULT profile..."
-    Set-Progress 5 "Creating restore point..."
-    Add-RestorePoint
-
-    # Default = conservative Windows 11 style baseline:
-    # do not disable core services; only optional/telemetry/UX items.
-    Set-Progress 20 "Default: privacy..."
-    Disable-TelemetryPolicy
-    Disable-ConsumerExperiences
-    Disable-Suggestions
-    Show-Extensions
-
-    Set-Progress 45 "Default: Game DVR..."
-    Disable-GameDVR
-
-    Set-Progress 60 "Default: optional services..."
-    foreach ($s in $Services | Where-Object { $_.Category -eq 'Gaming' -or $_.Category -eq 'Privacy' }) {
-        Set-ServiceMode $s.Name $s.Safe
-    }
-
-    Set-Progress 80 "Default: removing selected bloatware..."
-    foreach ($a in $Apps) { Remove-AppSafe $a }
-
-    Set-Progress 100 "DEFAULT complete"
-    Add-Log "Default profile complete. Restart Windows for all changes to settle."
-}
-
-function Apply-ServiceProfile($profile) {
-    Add-Log "Applying service profile: $profile"
-    Add-RestorePoint
-    $i=0
-    $list=@($Services)
-    foreach ($s in $list) {
-        $i++
-        $mode = $s.$profile
-        if ($mode) {
-            Set-ServiceMode $s.Name $mode
+    foreach($a in $appChecks){
+        if($a.Checked){
+            $i++;RemoveApp $a.Tag
+            SetStatus "App $i/$total" ([int](($i/$total)*100))
         }
-        Set-Progress (($i/$list.Count)*100) "$profile services: $($s.Display)"
     }
-    Add-Log "$profile service profile complete."
+    if($registryChecks[0].Checked){WindowsTweaks}
+    if($privacyChecks[0].Checked){PrivacyTweaks}
+    if($gamingChecks[0].Checked){GameTweaks}
+    if($networkChecks[0].Checked){NetworkTweaks}
+    SetStatus "เสร็จสิ้น" 100
+    AddLog "Selected changes completed."
+    RefreshServices
 }
 
-# -----------------------------
-# GUI
-# -----------------------------
-$form = New-Object Windows.Forms.Form
-$form.Text="LARZ1 Debloat v0.2"
-$form.Size=New-Object Drawing.Size(980,760)
-$form.MinimumSize=New-Object Drawing.Size(820,620)
-$form.StartPosition="CenterScreen"
-$form.BackColor=$BG
-$form.ForeColor=$FG
-
-$form.Controls.Add((New-Label "LARZ1 DEBLOAT" 24 18 500 36 20 $FG))
-$form.Controls.Add((New-Label "Windows 11/10 cleanup • services • privacy • gaming" 26 53 600 24 9 $MUTED))
-
-$defaultBtn = New-Object Windows.Forms.Button
-$defaultBtn.Text="APPLY WINDOWS 11 DEFAULT"
-$defaultBtn.Location=New-Object Drawing.Point(680,20)
-$defaultBtn.Size=New-Object Drawing.Size(250,38)
-$defaultBtn.FlatStyle="Flat"; $defaultBtn.FlatAppearance.BorderSize=0
-$defaultBtn.BackColor=$ACCENT; $defaultBtn.ForeColor=[Drawing.Color]::White
-$defaultBtn.Add_Click({ Apply-Windows11Default })
-
-# profile buttons
-$safeBtn = New-Object Windows.Forms.Button
-$safeBtn.Text="SAFE SERVICES"
-$safeBtn.Location=New-Object Drawing.Point(680,65)
-$safeBtn.Size=New-Object Drawing.Size(120,34)
-$safeBtn.FlatStyle="Flat"; $safeBtn.BackColor=$CARD2; $safeBtn.ForeColor=$FG
-$safeBtn.Add_Click({ Apply-ServiceProfile 'Safe' })
-
-$gamingBtn = New-Object Windows.Forms.Button
-$gamingBtn.Text="GAMING SERVICES"
-$gamingBtn.Location=New-Object Drawing.Point(810,65)
-$gamingBtn.Size=New-Object Drawing.Size(120,34)
-$gamingBtn.FlatStyle="Flat"; $gamingBtn.BackColor=$CARD2; $gamingBtn.ForeColor=$FG
-$gamingBtn.Add_Click({ Apply-ServiceProfile 'Gaming' })
-
-$form.Controls.Add($defaultBtn); $form.Controls.Add($safeBtn); $form.Controls.Add($gamingBtn)
-
-# scroll area
-$scroll = New-Object Windows.Forms.Panel
-$scroll.Location=New-Object Drawing.Point(20,110)
-$scroll.Size=New-Object Drawing.Size(940,400)
-$scroll.AutoScroll=$true
-$scroll.BackColor=$BG
-$form.Controls.Add($scroll)
-
-$y=10
-$groups = @('Gaming','Privacy','Optional','Network','Performance','Remote')
-foreach ($g in $groups) {
-    $header=New-Label "SERVICE • $g" 10 $y 850 28 11 $ACCENT
-    $scroll.Controls.Add($header); $y+=30
-
-    foreach ($s in ($Services | Where-Object Category -eq $g)) {
-        $card=New-Object Windows.Forms.Panel
-        $card.Location=New-Object Drawing.Point(10,$y)
-        $card.Size=New-Object Drawing.Size(880,48)
-        $card.BackColor=$CARD
-
-        $cb=New-Object Windows.Forms.CheckBox
-        $cb.Text="$($s.Display)  [$($s.Name)]"
-        $cb.Location=New-Object Drawing.Point(12,7)
-        $cb.Size=New-Object Drawing.Size(620,28)
-        $cb.ForeColor=$FG; $cb.BackColor=$CARD
-        $cb.Tag=$s
-        $cb.Font=New-Object Drawing.Font("Segoe UI",9)
-        $card.Controls.Add($cb)
-
-        $now=New-Label "Current: $(Get-ServiceStartMode $s.Name)" 635 8 220 25 8 $MUTED
-        $card.Controls.Add($now)
-
-        $scroll.Controls.Add($card)
-        $y+=54
-    }
-    $y+=10
+# ---------- Events ----------
+foreach($kv in $profileButtons.GetEnumerator()){
+    $kv.Value.Add_Click({
+        $mode=$this.Tag
+        if($mode -eq "BASELINE"){
+            AddLog "Baseline restore is available from RESTORE LAST BACKUP; first baseline is captured automatically."
+            RestoreLast
+        } else {ApplyProfile $mode}
+    })
 }
+$apply.Add_Click({ApplySelected})
+$restore.Add_Click({RestoreLast})
+$refresh.Add_Click({RefreshServices;SetStatus "Refresh complete" 100})
 
-# wheel handler on panel + all child controls
+# Search filtering
+$appSearch.Add_TextChanged({
+    $q=$appSearch.Text.ToLower()
+    foreach($c in $appChecks){$c.Visible=([string]::IsNullOrWhiteSpace($q) -or $c.Text.ToLower().Contains($q))}
+})
+$svcSearch.Add_TextChanged({
+    $q=$svcSearch.Text.ToLower()
+    foreach($r in $svcRows){$r.Panel.Visible=([string]::IsNullOrWhiteSpace($q) -or $r.Data[1].ToLower().Contains($q) -or $r.Data[0].ToLower().Contains($q))}
+})
+
+# ---------- Robust mouse wheel ----------
+function WheelScroll($panel,$e){
+    if(-not $panel.AutoScroll){return}
+    $delta=[int]($e.Delta / 2)
+    $current=-$panel.AutoScrollPosition.Y
+    $target=$current-$delta
+    if($target -lt 0){$target=0}
+    $max=[Math]::Max(0,$panel.VerticalScroll.Maximum-$panel.VerticalScroll.LargeChange+1)
+    if($target -gt $max){$target=$max}
+    $panel.AutoScrollPosition=New-Object Drawing.Point(0,$target)
+}
 $wheelHandler = {
     param($sender,$e)
-    $pos=$scroll.AutoScrollPosition
-    $newY=(-$pos.Y) - [int]($e.Delta/2)
-    if($newY -lt 0){$newY=0}
-    $scroll.AutoScrollPosition=New-Object Drawing.Point((- $pos.X),$newY)
+    WheelScroll $sender $e
+    $e.Handled=$true
 }
-$scroll.Add_MouseWheel($wheelHandler)
-foreach($c in $scroll.Controls) {
-    $c.Add_MouseWheel($wheelHandler)
-    foreach($cc in $c.Controls) { $cc.Add_MouseWheel($wheelHandler) }
+foreach($sp in @($appScroll,$svcScroll)){
+    $sp.Add_MouseWheel($wheelHandler)
+    foreach($child in $sp.Controls){
+        $child.Add_MouseWheel($wheelHandler)
+        foreach($grand in $child.Controls){$grand.Add_MouseWheel($wheelHandler)}
+    }
 }
 
-# bottom controls
-$script:progress=New-Object Windows.Forms.ProgressBar
-$script:progress.Location=New-Object Drawing.Point(20,525)
-$script:progress.Size=New-Object Drawing.Size(940,22)
-$form.Controls.Add($script:progress)
-
-$script:status=New-Label "Ready" 20 552 940 22 9 $MUTED
-$form.Controls.Add($script:status)
-
-$applySelected=New-Object Windows.Forms.Button
-$applySelected.Text="APPLY SELECTED SERVICES"
-$applySelected.Location=New-Object Drawing.Point(20,580)
-$applySelected.Size=New-Object Drawing.Size(240,40)
-$applySelected.FlatStyle="Flat"; $applySelected.BackColor=$CARD2; $applySelected.ForeColor=$FG
-
-$applySelected.Add_Click({
-    Add-RestorePoint
-    $checked=@()
-    foreach($p in $scroll.Controls) {
-        foreach($c in $p.Controls) {
-            if($c -is [Windows.Forms.CheckBox] -and $c.Checked){$checked += $c.Tag}
+# Initial
+Ensure-Path:
+if(-not(Test-Path (Join-Path $BackupRoot "FactoryBaseline.json"))){
+    try{
+        $rows=@()
+        foreach($s in $Services){
+            $m=Mode $s[0]
+            if($m -ne "Not Installed"){$rows += [pscustomobject]@{Name=$s[0];Mode=$m;State=(State $s[0])}}
         }
-    }
-    if($checked.Count -eq 0){ Add-Log "No services selected."; return }
-    $i=0
-    foreach($s in $checked) {
-        $i++
-        Set-ServiceMode $s.Name $s.Safe
-        Set-Progress (($i/$checked.Count)*100) "Applying: $($s.Display)"
-    }
-    Add-Log "Selected services applied."
-})
-$form.Controls.Add($applySelected)
-
-$refresh=New-Object Windows.Forms.Button
-$refresh.Text="REFRESH STATUS"
-$refresh.Location=New-Object Drawing.Point(275,580)
-$refresh.Size=New-Object Drawing.Size(150,40)
-$refresh.FlatStyle="Flat"; $refresh.BackColor=$CARD2; $refresh.ForeColor=$FG
-$refresh.Add_Click({
-    foreach($p in $scroll.Controls) {
-        foreach($c in $p.Controls) {
-            if($c -is [Windows.Forms.Panel]) {
-                foreach($cc in $c.Controls) {
-                    if($cc -is [Windows.Forms.Label] -and $cc.Text -like "Current:*") {
-                        $svcName=($c.Controls | Where-Object {$_ -is [Windows.Forms.CheckBox]} | Select-Object -First 1).Tag.Name
-                        $cc.Text="Current: $(Get-ServiceStartMode $svcName)"
-                    }
-                }
-            }
-        }
-    }
-    Add-Log "Service status refreshed."
-})
-$form.Controls.Add($refresh)
-
-$script:logBox=New-Object Windows.Forms.TextBox
-$script:logBox.Location=New-Object Drawing.Point(440,580)
-$script:logBox.Size=New-Object Drawing.Size(520,100)
-$script:logBox.Multiline=$true
-$script:logBox.ReadOnly=$true
-$script:logBox.ScrollBars="Vertical"
-$script:logBox.BackColor=$CARD
-$script:logBox.ForeColor=$FG
-$script:logBox.Font=New-Object Drawing.Font("Consolas",8.5)
-$form.Controls.Add($script:logBox)
-
-Add-Log "LARZ1 Debloat v0.2 ready."
-Add-Log "DEFAULT = conservative baseline; SAFE/GAMING are optional profiles."
-Add-Log "Protected core services are never modified."
+        $rows|ConvertTo-Json -Depth 3|Set-Content (Join-Path $BackupRoot "FactoryBaseline.json") -Encoding UTF8
+        AddLog "Factory baseline captured from this PC."
+    }catch{AddLog "Factory baseline capture failed."}
+}
+AddLog "LARZ1 Debloat v0.3 ready."
+AddLog "No change is applied until a profile/action is selected."
+AddLog "Protected Windows core services are blocked."
 
 [void]$form.ShowDialog()
