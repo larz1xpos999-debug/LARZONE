@@ -258,15 +258,25 @@ $form.BackColor=$C.bg
 $form.ForeColor=$C.white
 $form.Font=New-Object Drawing.Font($Font,10)
 $form.FormBorderStyle="Sizable"
+$form.WindowState=[Windows.Forms.FormWindowState]::Maximized
+$form.AutoScaleMode=[Windows.Forms.AutoScaleMode]::Dpi
+$form.KeyPreview=$true
 
-# Optional LARZ1 wallpaper: put LARZ1-background.jpg or .png beside this PS1.
-# The UI remains fully usable if the image is absent.
-$wallpaper = $null
+# Safe script directory: works when launched from a .ps1 AND when invoked through IEX.
+$ScriptDir = $null
+try {
+    if($PSCommandPath){ $ScriptDir = Split-Path -Parent $PSCommandPath }
+    elseif($MyInvocation.MyCommand.Path){ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+} catch {}
+if([string]::IsNullOrWhiteSpace($ScriptDir)){ $ScriptDir=(Get-Location).Path }
+
+# Optional LARZ1 wallpaper. If the script was started via IEX, use the current folder.
+$wallpaper=$null
 foreach($candidate in @(
-    (Join-Path $PSScriptRoot "LARZ1-background.jpg"),
-    (Join-Path $PSScriptRoot "LARZ1-background.png")
+    (Join-Path $ScriptDir "LARZ1-background.jpg"),
+    (Join-Path $ScriptDir "LARZ1-background.png")
 )){
-    if(Test-Path $candidate){
+    if(Test-Path -LiteralPath $candidate){
         try { $wallpaper=[Drawing.Image]::FromFile($candidate); break } catch {}
     }
 }
@@ -283,7 +293,9 @@ $header.Controls.Add((Label "L7  LARZ1" 24 12 350 45 27 $C.white))
 $header.Controls.Add((Label "DEBLOAT" 390 18 260 32 21 $C.white))
 $header.Controls.Add((Label "WINDOWS OPTIMIZATION TOOL" 392 52 360 22 9 $C.muted))
 $header.Controls.Add((Label "B E T T E R   P C   B E T T E R   G A M E" 1010 34 420 22 9 $C.white))
-$header.Controls.Add((Label "LARZ1 Debloat v0.3" 1260 63 230 20 9 $C.muted))
+$header.Controls.Add((Label "LARZ1 Debloat v0.4" 1260 63 230 20 9 $C.muted))
+$fullBtn=Button "⛶  FULLSCREEN" 1080 64 150 26
+$header.Controls.Add($fullBtn)
 
 # Sidebar
 $side=New-Object Windows.Forms.Panel
@@ -387,7 +399,7 @@ for($i=0;$i -lt $Apps.Count;$i++){
     $cb.Size=New-Object Drawing.Size(830,36)
     $cb.ForeColor=$C.white;$cb.BackColor=$C.card
     $cb.Font=New-Object Drawing.Font($Font,9)
-    $cb.Checked=$true
+    $cb.Checked=$false
     $appScroll.Controls.Add($cb);$appChecks+=$cb
 }
 $appSelect.Add_Click({foreach($c in $appChecks){$c.Checked=$true}})
@@ -515,7 +527,7 @@ $script:Progress.Style="Continuous";$script:Progress.Value=0
 $progressCard.Controls.Add($script:Progress)
 $script:StatusLabel=Label "พร้อมใช้งาน" 20 105 390 25 9 $C.muted
 $progressCard.Controls.Add($script:StatusLabel)
-$progressCard.Controls.Add((Label "LARZ1 Debloat v0.3  |  Better PC Better Game" 20 155 390 25 8 $C.muted))
+$progressCard.Controls.Add((Label "LARZ1 Debloat v0.4  |  Better PC Better Game" 20 155 390 25 8 $C.muted))
 
 $logCard=New-Object Windows.Forms.Panel
 $logCard.Location=New-Object Drawing.Point(445,0);$logCard.Size=New-Object Drawing.Size(997,205)
@@ -528,6 +540,25 @@ $script:LogBox.BackColor=$C.bg;$script:LogBox.ForeColor=$C.muted
 $script:LogBox.BorderStyle="FixedSingle";$script:LogBox.ReadOnly=$true
 $script:LogBox.Font=New-Object Drawing.Font("Consolas",9)
 $logCard.Controls.Add($script:LogBox)
+
+# Responsive layout: keep the main dashboard usable when resized.
+$form.Add_Resize({
+    if(-not $main){return}
+    $w=$main.ClientSize.Width
+    $h=$main.ClientSize.Height
+    $profilePanel.Width=[Math]::Max(700,$w-560)
+    $info.Left=[Math]::Max(760,$w-500)
+    $tabs.Width=[Math]::Max(700,[int]($w*0.64))
+    $right.Left=$tabs.Right+20
+    $right.Width=[Math]::Max(400,$w-$right.Left-20)
+    $bottom.Top=[Math]::Max(620,$h-225)
+    $bottom.Width=[Math]::Max(900,$w-36)
+    $logCard.Width=[Math]::Max(450,$bottom.Width-445)
+    $script:LogBox.Width=[Math]::Max(410,$logCard.Width-42)
+    $tabs.Height=[Math]::Max(400,$bottom.Top-$tabs.Top-12)
+    $appScroll.Height=$tabs.Height-130
+    $svcScroll.Height=$tabs.Height-130
+})
 
 # ---------- Profile actions ----------
 function ApplyProfile($profile) {
@@ -564,6 +595,37 @@ function RefreshServices {
         $r.Current.Text="Current: "+(Mode $r.Data[0])
         $r.Target.Text="LARZ1: "+$r.Data[3]
     }
+}
+function Confirm-Action($title,$message) {
+    $r=[Windows.Forms.MessageBox]::Show(
+        $message,
+        "LARZ1 $title",
+        [Windows.Forms.MessageBoxButtons]::YesNo,
+        [Windows.Forms.MessageBoxIcon]::Warning
+    )
+    return ($r -eq [Windows.Forms.DialogResult]::Yes)
+}
+function RestoreFactoryBaseline {
+    $file=Join-Path $BackupRoot "FactoryBaseline.json"
+    if(-not(Test-Path $file)){
+        [Windows.Forms.MessageBox]::Show(
+            "ยังไม่มี Factory Baseline ของเครื่องนี้",
+            "LARZ1",
+            [Windows.Forms.MessageBoxButtons]::OK,
+            [Windows.Forms.MessageBoxIcon]::Information
+        )|Out-Null
+        return
+    }
+    if(-not (Confirm-Action "Factory Baseline" "จะคืนค่า StartupType ของ service ที่ LARZ1 เก็บไว้ตอนเปิดโปรแกรมครั้งแรก`n`nดำเนินการต่อหรือไม่?")){return}
+    try{$rows=Get-Content $file -Raw|ConvertFrom-Json}catch{AddLog "Factory baseline read failed.";return}
+    $n=@($rows).Count;$i=0
+    foreach($x in @($rows)){
+        $i++;SetMode $x.Name $x.Mode|Out-Null
+        SetStatus "Factory restore $i/$n" ([int](($i/$n)*100))
+    }
+    SetStatus "Factory baseline restored" 100
+    AddLog "Factory baseline restored."
+    RefreshServices
 }
 function RestoreLast {
     $dirs=Get-ChildItem $BackupRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
@@ -603,9 +665,31 @@ function ApplySelected {
             SetStatus "App $i/$total" ([int](($i/$total)*100))
         }
     }
-    if($registryChecks[0].Checked){WindowsTweaks}
+    # Registry options
+    if($registryChecks[0].Checked){
+        RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" 0
+    } else {
+        RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "HideFileExt" 1
+    }
+    if($registryChecks[1].Checked){
+        RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowTaskViewButton" 1
+    } else {
+        RegDword "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowTaskViewButton" 0
+    }
+
+    # Privacy options
     if($privacyChecks[0].Checked){PrivacyTweaks}
+    if($privacyChecks[2].Checked){SetMode "WerSvc" "Manual"|Out-Null}
+
+    # Gaming options
     if($gamingChecks[0].Checked){GameTweaks}
+    if($gamingChecks[1].Checked){
+        foreach($r in $svcRows){
+            if($r.Check.Checked){SetMode $r.Data[0] $r.Data[4]|Out-Null}
+        }
+    }
+
+    # Network options
     if($networkChecks[0].Checked){NetworkTweaks}
     SetStatus "เสร็จสิ้น" 100
     AddLog "Selected changes completed."
@@ -617,14 +701,33 @@ foreach($kv in $profileButtons.GetEnumerator()){
     $kv.Value.Add_Click({
         $mode=$this.Tag
         if($mode -eq "BASELINE"){
-            AddLog "Baseline restore is available from RESTORE LAST BACKUP; first baseline is captured automatically."
-            RestoreLast
+            RestoreFactoryBaseline
         } else {ApplyProfile $mode}
     })
 }
 $apply.Add_Click({ApplySelected})
 $restore.Add_Click({RestoreLast})
 $refresh.Add_Click({RefreshServices;SetStatus "Refresh complete" 100})
+$fullBtn.Add_Click({
+    if($form.WindowState -eq [Windows.Forms.FormWindowState]::Maximized){
+        $form.WindowState=[Windows.Forms.FormWindowState]::Normal
+        $form.FormBorderStyle="Sizable"
+    } else {
+        $form.FormBorderStyle="None"
+        $form.WindowState=[Windows.Forms.FormWindowState]::Maximized
+    }
+})
+$form.Add_KeyDown({
+    param($sender,$e)
+    if($e.KeyCode -eq [Windows.Forms.Keys]::F11){
+        $fullBtn.PerformClick()
+        $e.SuppressKeyPress=$true
+    }
+    if($e.KeyCode -eq [Windows.Forms.Keys]::Escape -and $form.FormBorderStyle -eq "None"){
+        $fullBtn.PerformClick()
+        $e.SuppressKeyPress=$true
+    }
+})
 
 # Search filtering
 $appSearch.Add_TextChanged({
@@ -661,7 +764,6 @@ foreach($sp in @($appScroll,$svcScroll)){
 }
 
 # Initial
-Ensure-Path:
 if(-not(Test-Path (Join-Path $BackupRoot "FactoryBaseline.json"))){
     try{
         $rows=@()
@@ -673,8 +775,18 @@ if(-not(Test-Path (Join-Path $BackupRoot "FactoryBaseline.json"))){
         AddLog "Factory baseline captured from this PC."
     }catch{AddLog "Factory baseline capture failed."}
 }
-AddLog "LARZ1 Debloat v0.3 ready."
+AddLog "LARZ1 Debloat v0.4 ready."
 AddLog "No change is applied until a profile/action is selected."
 AddLog "Protected Windows core services are blocked."
+AddLog "F11 = Fullscreen | ESC = Exit fullscreen"
+$toolTip=New-Object Windows.Forms.ToolTip
+$toolTip.AutoPopDelay=5000
+$toolTip.InitialDelay=500
+$toolTip.ReshowDelay=300
+$toolTip.SetToolTip($apply,"สำรองข้อมูล + Restore Point แล้วใช้รายการที่เลือก")
+$toolTip.SetToolTip($restore,"คืนค่า StartupType จาก backup ล่าสุด")
+$toolTip.SetToolTip($fullBtn,"เต็มจอ / กลับโหมดหน้าต่าง (F11)")
+$toolTip.SetToolTip($script:RequireRestore,"เปิดไว้เพื่อให้หยุดทันทีถ้าสร้าง Restore Point ไม่สำเร็จ")
 
 [void]$form.ShowDialog()
+try{if($wallpaper){$wallpaper.Dispose()}}catch{}
